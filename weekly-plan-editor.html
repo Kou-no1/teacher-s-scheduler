@@ -1,0 +1,1458 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>週案エディタ 参考実装</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+      :root {
+        --bg: #f4f6f8;
+        --surface: #ffffff;
+        --surface-soft: #f8fafc;
+        --line: #d8e0e8;
+        --line-strong: #9aa9b8;
+        --text: #1f2933;
+        --muted: #5f6f7d;
+        --accent: #1f7a8c;
+        --accent-strong: #125866;
+        --danger: #b42318;
+        --shadow: 0 14px 30px rgba(31, 41, 51, 0.08);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: "M PLUS Rounded 1c", system-ui, sans-serif;
+      }
+
+      button,
+      input,
+      textarea {
+        font: inherit;
+      }
+
+      button {
+        border: 0;
+        cursor: pointer;
+      }
+
+      .app-shell {
+        min-height: 100vh;
+        padding: 18px;
+      }
+
+      .topbar {
+        display: grid;
+        grid-template-columns: minmax(180px, 1fr) auto;
+        gap: 16px;
+        align-items: end;
+        margin-bottom: 14px;
+      }
+
+      .brand-block {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: flex-end;
+      }
+
+      .brand-title {
+        margin: 0;
+        font-size: 1.35rem;
+        line-height: 1.15;
+        font-weight: 700;
+      }
+
+      .week-range {
+        color: var(--muted);
+        font-size: 0.95rem;
+        font-weight: 500;
+      }
+
+      .meta-fields {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .meta-field {
+        display: grid;
+        gap: 3px;
+        color: var(--muted);
+        font-size: 0.76rem;
+        font-weight: 700;
+      }
+
+      .meta-field input {
+        width: 92px;
+        min-height: 34px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        padding: 6px 8px;
+        background: var(--surface);
+        color: var(--text);
+      }
+
+      .meta-field input.teacher-input {
+        width: 136px;
+      }
+
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        justify-content: flex-end;
+      }
+
+      .btn {
+        min-height: 36px;
+        border-radius: 7px;
+        padding: 7px 11px;
+        background: var(--surface);
+        color: var(--text);
+        border: 1px solid var(--line);
+        font-weight: 700;
+      }
+
+      .btn:hover {
+        border-color: var(--line-strong);
+      }
+
+      .btn.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+
+      .btn.primary:hover {
+        background: var(--accent-strong);
+      }
+
+      .workspace {
+        display: grid;
+        grid-template-columns: 220px minmax(0, 1fr);
+        gap: 14px;
+        align-items: start;
+      }
+
+      .palette-panel,
+      .planner-panel {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        box-shadow: var(--shadow);
+      }
+
+      .palette-panel {
+        position: sticky;
+        top: 18px;
+        padding: 12px;
+      }
+
+      .panel-title {
+        margin: 0 0 10px;
+        font-size: 0.95rem;
+        font-weight: 700;
+      }
+
+      .subject-list {
+        display: grid;
+        gap: 7px;
+      }
+
+      .subject-chip {
+        display: grid;
+        grid-template-columns: 18px minmax(0, 1fr) auto;
+        gap: 8px;
+        align-items: center;
+        width: 100%;
+        min-height: 38px;
+        padding: 8px;
+        border-radius: 7px;
+        border: 1px solid var(--line);
+        background: var(--surface-soft);
+        color: var(--text);
+        text-align: left;
+      }
+
+      .subject-chip:hover,
+      .subject-chip.selected {
+        border-color: var(--subject-color);
+        background: #fff;
+      }
+
+      .subject-swatch {
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: var(--subject-color);
+        box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.16);
+      }
+
+      .subject-name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-weight: 700;
+      }
+
+      .subject-short {
+        display: inline-grid;
+        place-items: center;
+        min-width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        background: color-mix(in srgb, var(--subject-color) 16%, #ffffff);
+        color: var(--subject-color);
+        font-size: 0.78rem;
+        font-weight: 700;
+      }
+
+      .storage-status {
+        margin-top: 12px;
+        padding-top: 10px;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 0.78rem;
+        line-height: 1.45;
+      }
+
+      .planner-panel {
+        padding: 14px;
+        overflow: hidden;
+      }
+
+      .print-heading {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 8px;
+        align-items: end;
+        margin-bottom: 10px;
+      }
+
+      .print-heading h2 {
+        margin: 0;
+        font-size: 1.08rem;
+      }
+
+      .print-meta {
+        color: var(--muted);
+        font-size: 0.88rem;
+        text-align: right;
+      }
+
+      .schedule-wrap {
+        overflow-x: auto;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+      }
+
+      .schedule-table {
+        width: 100%;
+        min-width: 1080px;
+        border-collapse: collapse;
+        table-layout: fixed;
+        background: #fff;
+      }
+
+      .schedule-table th,
+      .schedule-table td {
+        border: 1px solid var(--line);
+        vertical-align: top;
+      }
+
+      .schedule-table th {
+        background: #eef5f7;
+        color: #26343f;
+        padding: 8px;
+        font-weight: 700;
+      }
+
+      .period-header,
+      .period-cell {
+        width: 62px;
+        text-align: center;
+      }
+
+      .period-cell {
+        background: #fafbfc;
+        color: var(--muted);
+        font-weight: 700;
+        padding-top: 12px;
+      }
+
+      .day-header-main {
+        display: block;
+        font-size: 0.98rem;
+      }
+
+      .day-header-date {
+        display: block;
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 0.78rem;
+      }
+
+      .slot-cell {
+        height: 168px;
+        padding: 0;
+        background: #fff;
+      }
+
+      .slot-cell.drag-over {
+        outline: 3px solid rgba(31, 122, 140, 0.35);
+        outline-offset: -3px;
+      }
+
+      .slot-card {
+        display: grid;
+        grid-template-rows: auto auto 1fr auto;
+        gap: 6px;
+        min-height: 168px;
+        padding: 8px;
+      }
+
+      .slot-toolbar {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 28px;
+        gap: 6px;
+        align-items: center;
+      }
+
+      .subject-badge,
+      .subject-drop {
+        min-height: 30px;
+        border-radius: 7px;
+        padding: 5px 8px;
+        font-weight: 700;
+        line-height: 1.2;
+      }
+
+      .subject-badge {
+        background: color-mix(in srgb, var(--subject-color) 16%, #ffffff);
+        color: var(--subject-color);
+        border: 1px solid color-mix(in srgb, var(--subject-color) 45%, #ffffff);
+      }
+
+      .subject-drop {
+        border: 1px dashed var(--line-strong);
+        background: #fbfcfd;
+        color: var(--muted);
+        text-align: left;
+      }
+
+      .slot-clear {
+        width: 28px;
+        height: 28px;
+        border-radius: 7px;
+        background: #fff5f5;
+        color: var(--danger);
+        border: 1px solid #ffd2cc;
+        font-weight: 700;
+      }
+
+      .slot-form {
+        display: grid;
+        gap: 5px;
+      }
+
+      .slot-form input,
+      .slot-form textarea,
+      .week-note {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: #fff;
+        color: var(--text);
+        padding: 6px 7px;
+      }
+
+      .slot-form input {
+        min-height: 30px;
+        font-weight: 700;
+      }
+
+      .slot-form textarea {
+        min-height: 42px;
+        resize: vertical;
+        line-height: 1.35;
+      }
+
+      .slot-form textarea.materials {
+        min-height: 34px;
+      }
+
+      .week-note-block {
+        display: grid;
+        gap: 6px;
+        margin-top: 12px;
+      }
+
+      .week-note-label {
+        color: var(--muted);
+        font-size: 0.84rem;
+        font-weight: 700;
+      }
+
+      .week-note {
+        min-height: 72px;
+        resize: vertical;
+        line-height: 1.5;
+      }
+
+      @media (max-width: 920px) {
+        .topbar {
+          grid-template-columns: 1fr;
+        }
+
+        .toolbar {
+          justify-content: flex-start;
+        }
+
+        .workspace {
+          grid-template-columns: 1fr;
+        }
+
+        .palette-panel {
+          position: static;
+        }
+
+        .subject-list {
+          grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        }
+      }
+
+      @page {
+        size: A4 landscape;
+        margin: 8mm;
+      }
+
+      @media print {
+        body {
+          background: #fff;
+          color: #111;
+        }
+
+        .no-print {
+          display: none !important;
+        }
+
+        .app-shell {
+          min-height: auto;
+          padding: 0;
+        }
+
+        .workspace {
+          display: block;
+        }
+
+        .planner-panel {
+          border: 0;
+          border-radius: 0;
+          box-shadow: none;
+          padding: 0;
+          overflow: visible;
+        }
+
+        .print-heading {
+          grid-template-columns: 1fr auto;
+          margin-bottom: 5mm;
+        }
+
+        .print-heading h2 {
+          font-size: 14pt;
+        }
+
+        .print-meta {
+          color: #111;
+          font-size: 9pt;
+        }
+
+        .schedule-wrap {
+          overflow: visible;
+          border: 0;
+          border-radius: 0;
+        }
+
+        .schedule-table {
+          width: 100%;
+          min-width: 0;
+          font-size: 8.5pt;
+          border-collapse: collapse;
+        }
+
+        .schedule-table th,
+        .schedule-table td {
+          border: 1px solid #333;
+        }
+
+        .schedule-table th {
+          background: #fff;
+          padding: 3px;
+        }
+
+        .period-header,
+        .period-cell {
+          width: 10mm;
+        }
+
+        .period-cell {
+          background: #fff;
+          color: #111;
+          padding-top: 3mm;
+        }
+
+        .slot-cell {
+          height: 27mm;
+        }
+
+        .slot-card {
+          min-height: 27mm;
+          padding: 2mm;
+          gap: 1.2mm;
+        }
+
+        .slot-toolbar {
+          grid-template-columns: 1fr;
+        }
+
+        .subject-badge,
+        .subject-drop {
+          min-height: auto;
+          border: 0;
+          border-radius: 0;
+          padding: 0;
+          background: transparent !important;
+          color: #111 !important;
+          font-size: 8pt;
+        }
+
+        .subject-drop {
+          color: #777 !important;
+        }
+
+        .slot-form {
+          gap: 1mm;
+        }
+
+        .slot-form input,
+        .slot-form textarea,
+        .week-note {
+          border: 0;
+          border-radius: 0;
+          background: transparent;
+          padding: 0;
+          color: #111;
+          resize: none;
+          overflow: hidden;
+        }
+
+        .slot-form input {
+          min-height: 4.5mm;
+          font-size: 8pt;
+        }
+
+        .slot-form textarea {
+          min-height: 9mm;
+          font-size: 7.5pt;
+          line-height: 1.25;
+        }
+
+        .slot-form textarea.materials {
+          min-height: 6mm;
+        }
+
+        .week-note-block {
+          margin-top: 4mm;
+        }
+
+        .week-note-label {
+          color: #111;
+          font-size: 9pt;
+        }
+
+        .week-note {
+          min-height: 16mm;
+          border-top: 1px solid #333;
+          padding-top: 2mm;
+          font-size: 8.5pt;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+      const { useEffect, useMemo, useState } = React;
+
+      const ENABLE_LOCAL_STORAGE = false;
+      const STORAGE_KEYS = {
+        appState: "weeklyPlanEditor:v1:appState"
+      };
+
+      const DAYS = [
+        { key: "mon", label: "月", offset: 0 },
+        { key: "tue", label: "火", offset: 1 },
+        { key: "wed", label: "水", offset: 2 },
+        { key: "thu", label: "木", offset: 3 },
+        { key: "fri", label: "金", offset: 4 }
+      ];
+
+      const PERIODS = [1, 2, 3, 4, 5, 6];
+
+      const DEFAULT_SUBJECTS = [
+        {
+          id: "japanese",
+          name: "国語",
+          shortName: "国",
+          color: "#d94f45",
+          category: "subject",
+          countsTowardHours: true,
+          annualStandardHours: 245,
+          sortOrder: 10,
+          archived: false
+        },
+        {
+          id: "social",
+          name: "社会",
+          shortName: "社",
+          color: "#b7791f",
+          category: "subject",
+          countsTowardHours: true,
+          annualStandardHours: 105,
+          sortOrder: 20,
+          archived: false
+        },
+        {
+          id: "math",
+          name: "算数",
+          shortName: "算",
+          color: "#2f80ed",
+          category: "subject",
+          countsTowardHours: true,
+          annualStandardHours: 175,
+          sortOrder: 30,
+          archived: false
+        },
+        {
+          id: "science",
+          name: "理科",
+          shortName: "理",
+          color: "#1f9d73",
+          category: "subject",
+          countsTowardHours: true,
+          annualStandardHours: 105,
+          sortOrder: 40,
+          archived: false
+        },
+        {
+          id: "music",
+          name: "音楽",
+          shortName: "音",
+          color: "#8e63ce",
+          category: "subject",
+          countsTowardHours: true,
+          annualStandardHours: 60,
+          sortOrder: 50,
+          archived: false
+        },
+        {
+          id: "art",
+          name: "図工",
+          shortName: "図",
+          color: "#d85d9f",
+          category: "subject",
+          countsTowardHours: true,
+          annualStandardHours: 60,
+          sortOrder: 60,
+          archived: false
+        },
+        {
+          id: "pe",
+          name: "体育",
+          shortName: "体",
+          color: "#208b5b",
+          category: "subject",
+          countsTowardHours: true,
+          annualStandardHours: 105,
+          sortOrder: 70,
+          archived: false
+        },
+        {
+          id: "morality",
+          name: "道徳",
+          shortName: "道",
+          color: "#6f63b6",
+          category: "special",
+          countsTowardHours: true,
+          annualStandardHours: 35,
+          sortOrder: 80,
+          archived: false
+        },
+        {
+          id: "english",
+          name: "外国語",
+          shortName: "外",
+          color: "#0077b6",
+          category: "subject",
+          countsTowardHours: true,
+          annualStandardHours: 70,
+          sortOrder: 90,
+          archived: false
+        },
+        {
+          id: "integrated",
+          name: "総合",
+          shortName: "総",
+          color: "#5f7f24",
+          category: "subject",
+          countsTowardHours: true,
+          annualStandardHours: 70,
+          sortOrder: 100,
+          archived: false
+        },
+        {
+          id: "special",
+          name: "特活",
+          shortName: "特",
+          color: "#f2994a",
+          category: "special",
+          countsTowardHours: true,
+          annualStandardHours: 35,
+          sortOrder: 110,
+          archived: false
+        },
+        {
+          id: "homeroom",
+          name: "学活",
+          shortName: "学",
+          color: "#00a5a5",
+          category: "special",
+          countsTowardHours: true,
+          annualStandardHours: 35,
+          sortOrder: 120,
+          archived: false
+        },
+        {
+          id: "event",
+          name: "行事",
+          shortName: "行",
+          color: "#667085",
+          category: "event",
+          countsTowardHours: false,
+          sortOrder: 130,
+          archived: false
+        }
+      ];
+
+      function subjectListToMap(subjects) {
+        return subjects.reduce((acc, subject) => {
+          acc[subject.id] = subject;
+          return acc;
+        }, {});
+      }
+
+      function nowISO() {
+        return new Date().toISOString();
+      }
+
+      function pad2(value) {
+        return String(value).padStart(2, "0");
+      }
+
+      function parseISODateLocal(isoDate) {
+        const [year, month, day] = isoDate.split("-").map(Number);
+        return new Date(year, month - 1, day);
+      }
+
+      function formatISODateLocal(date) {
+        return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+      }
+
+      function addDaysISO(isoDate, days) {
+        const date = parseISODateLocal(isoDate);
+        date.setDate(date.getDate() + days);
+        return formatISODateLocal(date);
+      }
+
+      function startOfWeekISO(date) {
+        const copy = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+        const day = copy.getDay() || 7;
+        copy.setDate(copy.getDate() - day + 1);
+        return formatISODateLocal(copy);
+      }
+
+      function formatJapaneseShortDate(isoDate) {
+        const date = parseISODateLocal(isoDate);
+        return `${date.getMonth() + 1}/${date.getDate()}`;
+      }
+
+      function formatWeekRange(weekStartISO) {
+        const weekEndISO = addDaysISO(weekStartISO, 4);
+        const start = parseISODateLocal(weekStartISO);
+        const end = parseISODateLocal(weekEndISO);
+        return `${start.getFullYear()}/${pad2(start.getMonth() + 1)}/${pad2(start.getDate())} - ${pad2(end.getMonth() + 1)}/${pad2(end.getDate())}`;
+      }
+
+      function createSlotKey(day, period) {
+        return `${day}-${period}`;
+      }
+
+      function createEmptySlot(day, period) {
+        const slotKey = createSlotKey(day, period);
+        return {
+          id: slotKey,
+          day,
+          period,
+          subjectId: null,
+          unitTitle: "",
+          objective: "",
+          materials: "",
+          teacherNote: "",
+          status: "empty",
+          eventIds: [],
+          movedFrom: null,
+          movedTo: null,
+          locked: false,
+          updatedAt: nowISO()
+        };
+      }
+
+      function createEmptyWeek(weekStartISO, copiedFromWeekId = null) {
+        const slots = {};
+        DAYS.forEach((day) => {
+          PERIODS.forEach((period) => {
+            slots[createSlotKey(day.key, period)] = createEmptySlot(day.key, period);
+          });
+        });
+
+        return {
+          id: weekStartISO,
+          weekStartISO,
+          weekEndISO: addDaysISO(weekStartISO, 4),
+          title: `${formatJapaneseShortDate(weekStartISO)}週`,
+          copiedFromWeekId,
+          slots,
+          events: {},
+          note: "",
+          createdAt: nowISO(),
+          updatedAt: nowISO()
+        };
+      }
+
+      function copyWeekPlan(sourceWeek, targetWeekId) {
+        const nextWeek = createEmptyWeek(targetWeekId, sourceWeek.id);
+        const copiedSlots = {};
+
+        Object.entries(sourceWeek.slots).forEach(([slotKey, slot]) => {
+          copiedSlots[slotKey] = {
+            ...slot,
+            id: slotKey,
+            eventIds: [],
+            movedFrom: null,
+            movedTo: null,
+            updatedAt: nowISO()
+          };
+        });
+
+        return {
+          ...nextWeek,
+          slots: copiedSlots,
+          events: {},
+          note: sourceWeek.note,
+          updatedAt: nowISO()
+        };
+      }
+
+      function seedExampleWeek(week) {
+        const pattern = {
+          "mon-1": "japanese",
+          "mon-2": "math",
+          "mon-3": "science",
+          "mon-4": "pe",
+          "mon-5": "morality",
+          "tue-1": "math",
+          "tue-2": "japanese",
+          "tue-3": "social",
+          "tue-4": "music",
+          "tue-5": "integrated",
+          "wed-1": "japanese",
+          "wed-2": "math",
+          "wed-3": "art",
+          "wed-4": "art",
+          "wed-5": "homeroom",
+          "thu-1": "english",
+          "thu-2": "science",
+          "thu-3": "japanese",
+          "thu-4": "pe",
+          "thu-5": "special",
+          "fri-1": "math",
+          "fri-2": "japanese",
+          "fri-3": "social",
+          "fri-4": "music",
+          "fri-5": "integrated"
+        };
+
+        const slots = { ...week.slots };
+        Object.entries(pattern).forEach(([slotKey, subjectId]) => {
+          slots[slotKey] = {
+            ...slots[slotKey],
+            subjectId,
+            status: "planned",
+            updatedAt: nowISO()
+          };
+        });
+
+        return { ...week, slots, updatedAt: nowISO() };
+      }
+
+      function createInitialAppState() {
+        const activeWeekId = startOfWeekISO(new Date());
+        const initialWeek = seedExampleWeek(createEmptyWeek(activeWeekId));
+        const timestamp = nowISO();
+
+        return {
+          schemaVersion: 1,
+          meta: {
+            activeWeekId,
+            schoolYear: parseISODateLocal(activeWeekId).getFullYear(),
+            grade: "4",
+            className: "1組",
+            teacherName: "",
+            createdAt: timestamp,
+            updatedAt: timestamp
+          },
+          settings: {
+            days: DAYS.map((day) => day.key),
+            periods: PERIODS,
+            locale: "ja-JP",
+            print: {
+              paper: "A4",
+              orientation: "landscape",
+              showTeacherName: true,
+              showGeneratedAt: false
+            }
+          },
+          subjects: subjectListToMap(DEFAULT_SUBJECTS),
+          weeks: {
+            [activeWeekId]: initialWeek
+          },
+          templates: {}
+        };
+      }
+
+      function loadAppStateFromStorage() {
+        if (!ENABLE_LOCAL_STORAGE) return null;
+
+        // TODO(Codex): localStorageを有効化する時は、ここでmigrateAppStateとvalidateAppStateを通す。
+        try {
+          const raw = window.localStorage.getItem(STORAGE_KEYS.appState);
+          if (!raw) return null;
+          return JSON.parse(raw);
+        } catch (error) {
+          console.warn("週案データの読み込みに失敗しました", error);
+          return null;
+        }
+      }
+
+      function saveAppStateToStorage(appState) {
+        if (!ENABLE_LOCAL_STORAGE) return false;
+
+        // TODO(Codex): 保存失敗時はUIに警告を出し、JSONエクスポート導線を追加する。
+        try {
+          window.localStorage.setItem(STORAGE_KEYS.appState, JSON.stringify(appState));
+          return true;
+        } catch (error) {
+          console.warn("週案データの保存に失敗しました", error);
+          return false;
+        }
+      }
+
+      function SubjectPalette({ subjects, selectedSubjectId, onSelect }) {
+        const visibleSubjects = useMemo(
+          () =>
+            Object.values(subjects)
+              .filter((subject) => !subject.archived)
+              .sort((a, b) => a.sortOrder - b.sortOrder),
+          [subjects]
+        );
+
+        return (
+          <aside className="palette-panel no-print">
+            <h2 className="panel-title">教科パレット</h2>
+            <div className="subject-list">
+              {visibleSubjects.map((subject) => (
+                <button
+                  key={subject.id}
+                  type="button"
+                  className={`subject-chip ${selectedSubjectId === subject.id ? "selected" : ""}`}
+                  style={{ "--subject-color": subject.color }}
+                  draggable
+                  onClick={() => onSelect(subject.id)}
+                  onDragStart={(event) => {
+                    event.dataTransfer.setData("application/x-weekly-subject", subject.id);
+                    event.dataTransfer.setData("text/plain", subject.id);
+                    event.dataTransfer.effectAllowed = "copy";
+                  }}
+                  aria-pressed={selectedSubjectId === subject.id}
+                >
+                  <span className="subject-swatch" aria-hidden="true"></span>
+                  <span className="subject-name">{subject.name}</span>
+                  <span className="subject-short">{subject.shortName}</span>
+                </button>
+              ))}
+            </div>
+            <div className="storage-status">
+              保存: React stateのみ
+              <br />
+              localStorage差し込み位置は関数化済み
+            </div>
+          </aside>
+        );
+      }
+
+      function WeekGrid({
+        week,
+        subjects,
+        selectedSubjectId,
+        onAssignSubject,
+        onClearSubject,
+        onUpdateSlotField
+      }) {
+        const [dragOverSlotKey, setDragOverSlotKey] = useState(null);
+
+        return (
+          <div className="schedule-wrap">
+            <table className="schedule-table">
+              <thead>
+                <tr>
+                  <th className="period-header">時限</th>
+                  {DAYS.map((day) => {
+                    const dayISO = addDaysISO(week.weekStartISO, day.offset);
+                    return (
+                      <th key={day.key}>
+                        <span className="day-header-main">{day.label}</span>
+                        <span className="day-header-date">{formatJapaneseShortDate(dayISO)}</span>
+                      </th>
+                    );
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {PERIODS.map((period) => (
+                  <tr key={period}>
+                    <td className="period-cell">{period}限</td>
+                    {DAYS.map((day) => {
+                      const slotKey = createSlotKey(day.key, period);
+                      const slot = week.slots[slotKey] || createEmptySlot(day.key, period);
+                      const subject = slot.subjectId ? subjects[slot.subjectId] : null;
+                      const isDragOver = dragOverSlotKey === slotKey;
+
+                      return (
+                        <td
+                          key={slotKey}
+                          className={`slot-cell ${isDragOver ? "drag-over" : ""}`}
+                          onDragOver={(event) => {
+                            event.preventDefault();
+                            event.dataTransfer.dropEffect = "copy";
+                            setDragOverSlotKey(slotKey);
+                          }}
+                          onDragLeave={() => setDragOverSlotKey(null)}
+                          onDrop={(event) => {
+                            event.preventDefault();
+                            const subjectId =
+                              event.dataTransfer.getData("application/x-weekly-subject") ||
+                              event.dataTransfer.getData("text/plain");
+                            if (subjectId && subjects[subjectId]) {
+                              onAssignSubject(slotKey, subjectId);
+                            }
+                            setDragOverSlotKey(null);
+                          }}
+                        >
+                          <div className="slot-card">
+                            <div className="slot-toolbar">
+                              {subject ? (
+                                <div
+                                  className="subject-badge"
+                                  style={{ "--subject-color": subject.color }}
+                                >
+                                  {subject.name}
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="subject-drop no-print"
+                                  onClick={() => {
+                                    if (selectedSubjectId) onAssignSubject(slotKey, selectedSubjectId);
+                                  }}
+                                >
+                                  教科
+                                </button>
+                              )}
+                              {subject ? (
+                                <button
+                                  type="button"
+                                  className="slot-clear no-print"
+                                  title="教科を外す"
+                                  onClick={() => onClearSubject(slotKey)}
+                                >
+                                  ×
+                                </button>
+                              ) : (
+                                <span className="no-print" aria-hidden="true"></span>
+                              )}
+                            </div>
+
+                            <div className="slot-form">
+                              <input
+                                value={slot.unitTitle}
+                                onChange={(event) =>
+                                  onUpdateSlotField(slotKey, "unitTitle", event.target.value)
+                                }
+                                placeholder="単元名"
+                                aria-label={`${day.label}${period}限 単元名`}
+                              />
+                              <textarea
+                                value={slot.objective}
+                                onChange={(event) =>
+                                  onUpdateSlotField(slotKey, "objective", event.target.value)
+                                }
+                                placeholder="ねらい"
+                                aria-label={`${day.label}${period}限 ねらい`}
+                              />
+                              <textarea
+                                className="materials"
+                                value={slot.materials}
+                                onChange={(event) =>
+                                  onUpdateSlotField(slotKey, "materials", event.target.value)
+                                }
+                                placeholder="持ち物"
+                                aria-label={`${day.label}${period}限 持ち物`}
+                              />
+                            </div>
+                          </div>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+      }
+
+      function App() {
+        const [appState, setAppState] = useState(() => loadAppStateFromStorage() || createInitialAppState());
+        const [selectedSubjectId, setSelectedSubjectId] = useState("japanese");
+
+        const activeWeek = appState.weeks[appState.meta.activeWeekId];
+        const copiedFromLabel = activeWeek?.copiedFromWeekId
+          ? ` / コピー元 ${formatJapaneseShortDate(activeWeek.copiedFromWeekId)}週`
+          : "";
+
+        useEffect(() => {
+          saveAppStateToStorage(appState);
+        }, [appState]);
+
+        function updateMetaField(field, value) {
+          setAppState((prev) => ({
+            ...prev,
+            meta: {
+              ...prev.meta,
+              [field]: value,
+              updatedAt: nowISO()
+            }
+          }));
+        }
+
+        function goToWeek(targetWeekId) {
+          setAppState((prev) => {
+            const weeks = { ...prev.weeks };
+            if (!weeks[targetWeekId]) {
+              weeks[targetWeekId] = createEmptyWeek(targetWeekId);
+            }
+
+            return {
+              ...prev,
+              meta: {
+                ...prev.meta,
+                activeWeekId: targetWeekId,
+                updatedAt: nowISO()
+              },
+              weeks
+            };
+          });
+        }
+
+        function updateActiveWeek(nextWeek) {
+          setAppState((prev) => ({
+            ...prev,
+            meta: {
+              ...prev.meta,
+              updatedAt: nowISO()
+            },
+            weeks: {
+              ...prev.weeks,
+              [nextWeek.id]: nextWeek
+            }
+          }));
+        }
+
+        function updateSlot(slotKey, patch) {
+          const [day, periodText] = slotKey.split("-");
+          const period = Number(periodText);
+
+          setAppState((prev) => {
+            const week = prev.weeks[prev.meta.activeWeekId];
+            const currentSlot = week.slots[slotKey] || createEmptySlot(day, period);
+            const nextSlot = {
+              ...currentSlot,
+              ...patch,
+              updatedAt: nowISO()
+            };
+            const nextWeek = {
+              ...week,
+              slots: {
+                ...week.slots,
+                [slotKey]: nextSlot
+              },
+              updatedAt: nowISO()
+            };
+
+            return {
+              ...prev,
+              meta: {
+                ...prev.meta,
+                updatedAt: nowISO()
+              },
+              weeks: {
+                ...prev.weeks,
+                [week.id]: nextWeek
+              }
+            };
+          });
+        }
+
+        function assignSubject(slotKey, subjectId) {
+          updateSlot(slotKey, {
+            subjectId,
+            status: "planned"
+          });
+        }
+
+        function clearSubject(slotKey) {
+          updateSlot(slotKey, {
+            subjectId: null,
+            status: "empty"
+          });
+        }
+
+        function updateSlotField(slotKey, field, value) {
+          updateSlot(slotKey, {
+            [field]: value
+          });
+        }
+
+        function updateWeekNote(value) {
+          const nextWeek = {
+            ...activeWeek,
+            note: value,
+            updatedAt: nowISO()
+          };
+          updateActiveWeek(nextWeek);
+        }
+
+        function createNextWeekFromCurrent() {
+          const nextWeekId = addDaysISO(appState.meta.activeWeekId, 7);
+          const alreadyExists = Boolean(appState.weeks[nextWeekId]);
+          if (alreadyExists && !window.confirm("次週のデータを現在週の内容で上書きしますか？")) {
+            return;
+          }
+
+          setAppState((prev) => {
+            const sourceWeek = prev.weeks[prev.meta.activeWeekId];
+            const nextWeek = copyWeekPlan(sourceWeek, nextWeekId);
+            return {
+              ...prev,
+              meta: {
+                ...prev.meta,
+                activeWeekId: nextWeekId,
+                updatedAt: nowISO()
+              },
+              weeks: {
+                ...prev.weeks,
+                [nextWeekId]: nextWeek
+              }
+            };
+          });
+        }
+
+        function copyPreviousWeekIntoCurrent() {
+          const previousWeekId = addDaysISO(appState.meta.activeWeekId, -7);
+          const previousWeek = appState.weeks[previousWeekId];
+          if (!previousWeek) {
+            window.alert("前週データがありません。");
+            return;
+          }
+
+          if (!window.confirm("現在週の内容を前週コピーで上書きしますか？")) {
+            return;
+          }
+
+          const copiedWeek = copyWeekPlan(previousWeek, appState.meta.activeWeekId);
+          updateActiveWeek({
+            ...copiedWeek,
+            id: appState.meta.activeWeekId,
+            weekStartISO: appState.meta.activeWeekId,
+            weekEndISO: addDaysISO(appState.meta.activeWeekId, 4),
+            copiedFromWeekId: previousWeekId
+          });
+        }
+
+        // TODO(Codex): 時数集計を追加する場合は、ここでcalculateHourSummary(appState)をuseMemoする。
+        // TODO(Codex): テンプレート保存を追加する場合は、createTemplateFromWeek(activeWeek)を別関数で実装する。
+        // TODO(Codex): 行事回り込みはfindMoveSuggestions()とapplyMoveSuggestion()を分離して追加する。
+
+        if (!activeWeek) {
+          return <div className="app-shell">週データを読み込めませんでした。</div>;
+        }
+
+        return (
+          <main className="app-shell">
+            <header className="topbar no-print">
+              <div>
+                <div className="brand-block">
+                  <h1 className="brand-title">週案エディタ</h1>
+                  <div className="week-range">
+                    {formatWeekRange(appState.meta.activeWeekId)}
+                    {copiedFromLabel}
+                  </div>
+                </div>
+                <div className="meta-fields">
+                  <label className="meta-field">
+                    年度
+                    <input
+                      inputMode="numeric"
+                      value={appState.meta.schoolYear}
+                      onChange={(event) => updateMetaField("schoolYear", event.target.value)}
+                    />
+                  </label>
+                  <label className="meta-field">
+                    学年
+                    <input
+                      value={appState.meta.grade}
+                      onChange={(event) => updateMetaField("grade", event.target.value)}
+                    />
+                  </label>
+                  <label className="meta-field">
+                    組
+                    <input
+                      value={appState.meta.className}
+                      onChange={(event) => updateMetaField("className", event.target.value)}
+                    />
+                  </label>
+                  <label className="meta-field">
+                    担任
+                    <input
+                      className="teacher-input"
+                      value={appState.meta.teacherName}
+                      onChange={(event) => updateMetaField("teacherName", event.target.value)}
+                    />
+                  </label>
+                </div>
+              </div>
+
+              <nav className="toolbar" aria-label="週操作">
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => goToWeek(addDaysISO(appState.meta.activeWeekId, -7))}
+                >
+                  前週
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => goToWeek(addDaysISO(appState.meta.activeWeekId, 7))}
+                >
+                  次週
+                </button>
+                <button type="button" className="btn primary" onClick={createNextWeekFromCurrent}>
+                  次週を作成
+                </button>
+                <button type="button" className="btn" onClick={copyPreviousWeekIntoCurrent}>
+                  前週からコピー
+                </button>
+                <button type="button" className="btn" onClick={() => window.print()}>
+                  印刷
+                </button>
+              </nav>
+            </header>
+
+            <div className="workspace">
+              <SubjectPalette
+                subjects={appState.subjects}
+                selectedSubjectId={selectedSubjectId}
+                onSelect={setSelectedSubjectId}
+              />
+
+              <section className="planner-panel">
+                <div className="print-heading">
+                  <div>
+                    <h2>週案</h2>
+                    <div className="print-meta">
+                      {appState.meta.grade}年 {appState.meta.className}
+                      {appState.meta.teacherName ? ` / 担任 ${appState.meta.teacherName}` : ""}
+                    </div>
+                  </div>
+                  <div className="print-meta">{formatWeekRange(activeWeek.weekStartISO)}</div>
+                </div>
+
+                <WeekGrid
+                  week={activeWeek}
+                  subjects={appState.subjects}
+                  selectedSubjectId={selectedSubjectId}
+                  onAssignSubject={assignSubject}
+                  onClearSubject={clearSubject}
+                  onUpdateSlotField={updateSlotField}
+                />
+
+                <div className="week-note-block">
+                  <label className="week-note-label" htmlFor="week-note">
+                    週メモ
+                  </label>
+                  <textarea
+                    id="week-note"
+                    className="week-note"
+                    value={activeWeek.note}
+                    onChange={(event) => updateWeekNote(event.target.value)}
+                    placeholder="行事、提出物、児童対応など"
+                  />
+                </div>
+              </section>
+            </div>
+          </main>
+        );
+      }
+
+      ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+    </script>
+  </body>
+</html>
