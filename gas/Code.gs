@@ -77,4 +77,120 @@ function validateEventBatch_(payload) {
 }
 
 // TODO(第3層): 更新済み行事の移動・削除を含む双方向同期は、競合ルールと履歴を加えて実装する。
-// TODO(第3層): Drive/Sheetsへの本人別保存。保存revisionを照合し、児童メモの同期は別設定にする。
+// DriveのファイルIDは利用者別のサーバー設定で管理し、クライアントの任意IDを受け取らない。
+const CLOUD_FILE_KEY_ = 'weeklyPlannerFileV4';
+const CLOUD_BACKUP_KEY_ = 'weeklyPlannerBackupsV4';
+const CLOUD_LIMIT_ = 4 * 1024 * 1024;
+
+function getCloudStatus() {
+  return withCloudLock_(function () {
+    const current = readCloudHead_();
+    return { exists: !!current, revision: current ? current.revision : 0, updatedAt: current ? current.updatedAt : null };
+  });
+}
+function loadCloudPlan() {
+  return withCloudLock_(function () {
+    const current = readCloudHead_();
+    return current ? Object.assign({ exists: true, headRevision: current.revision }, current) : { exists: false, revision: 0 };
+  });
+}
+function saveCloudPlan(payload) {
+  if (!payload || !Number.isInteger(payload.baseRevision) || payload.baseRevision < 0 || typeof payload.includePrivate !== 'boolean' || typeof payload.planText !== 'string') throw new Error('保存リクエストの形式が不正です');
+  if (Utilities.newBlob(payload.planText).getBytes().length > CLOUD_LIMIT_) throw new Error('Drive保存は4MB以内です。JSONを端末へバックアップしてください');
+  const plan = validateCloudPlan_(payload.planText, payload.includePrivate);
+  return withCloudLock_(function () {
+    const properties = PropertiesService.getUserProperties();
+    const current = readCloudHead_();
+    const revision = current ? current.revision : 0;
+    if (payload.baseRevision !== revision) throw new Error('保存競合: 別端末の変更があります。JSONをバックアップしてからDriveの最新内容を確認してください');
+    let backups = readBackupRegistry_();
+    const now = new Date().toISOString();
+    if (current) {
+      // バックアップに失敗したら本体更新を行わない。履歴はアプリが作ったIDだけを扱う。
+      const backup = Drive.Files.create({ name: '週案バックアップ-r' + revision + '.json', mimeType: 'application/json' }, cloudBlob_(current), { fields: 'id' });
+      backups.unshift({ id: backup.id, revision: revision, updatedAt: current.updatedAt, includePrivate: current.includePrivate });
+      properties.setProperty(CLOUD_BACKUP_KEY_, JSON.stringify(backups));
+    }
+    const envelope = { revision: revision + 1, updatedAt: now, includePrivate: payload.includePrivate, plan: plan };
+    const fileId = properties.getProperty(CLOUD_FILE_KEY_);
+    if (fileId) Drive.Files.update({ name: '週案エディタ-v4.json' }, fileId, cloudBlob_(envelope), { fields: 'id' });
+    else {
+      const file = Drive.Files.create({ name: '週案エディタ-v4.json', mimeType: 'application/json' }, cloudBlob_(envelope), { fields: 'id' });
+      properties.setProperty(CLOUD_FILE_KEY_, file.id);
+    }
+    // 世代削除は更新後。失敗した世代は登録を残し、次回再試行する。
+    const retained = backups.slice(0, 10);
+    backups.slice(10).forEach(function (entry) {
+      try { Drive.Files.update({ trashed: true }, entry.id, null, { fields: 'id' }); }
+      catch (error) { retained.push(entry); }
+    });
+    properties.setProperty(CLOUD_BACKUP_KEY_, JSON.stringify(retained));
+    return { revision: envelope.revision, updatedAt: now };
+  });
+}
+function listCloudBackups() {
+  return withCloudLock_(function () { return readBackupRegistry_(); });
+}
+function loadCloudBackup(payload) {
+  return withCloudLock_(function () {
+    const entry = payload && readBackupRegistry_().find(function (row) { return row.id === payload.backupId; });
+    if (!entry) throw new Error('この利用者のバックアップではありません');
+    const current = readCloudHead_();
+    if (!current) throw new Error('現在のDrive保存がありません');
+    return Object.assign({ exists: true, headRevision: current.revision }, readCloudFile_(entry.id));
+  });
+}
+function withCloudLock_(fn) {
+  const lock = LockService.getUserLock();
+  if (!lock.tryLock(10000)) throw new Error('保存処理中です。少し待ってください');
+  try { return fn(); } finally { lock.releaseLock(); }
+}
+function cloudBlob_(data) { return Utilities.newBlob(JSON.stringify(data), 'application/json', 'weekly-plan.json'); }
+function readBackupRegistry_() {
+  const raw = PropertiesService.getUserProperties().getProperty(CLOUD_BACKUP_KEY_);
+  const rows = raw ? parseCloudJson_(raw) : [];
+  if (!Array.isArray(rows)) throw new Error('バックアップ管理情報が不正です');
+  return rows;
+}
+function readCloudHead_() {
+  const id = PropertiesService.getUserProperties().getProperty(CLOUD_FILE_KEY_);
+  return id ? readCloudFile_(id) : null;
+}
+function readCloudFile_(id) {
+  const response = UrlFetchApp.fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(id) + '?alt=media', {
+    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, muteHttpExceptions: true
+  });
+  if (response.getResponseCode() !== 200) throw new Error('Driveファイルを読めません。削除・権限・API設定を確認してください');
+  const raw = response.getContentText('UTF-8');
+  if (Utilities.newBlob(raw).getBytes().length > CLOUD_LIMIT_ + 2048) throw new Error('Driveファイルが大きすぎます');
+  const envelope = parseCloudJson_(raw);
+  if (!envelope || !Number.isInteger(envelope.revision) || envelope.revision < 1 || typeof envelope.updatedAt !== 'string' || typeof envelope.includePrivate !== 'boolean') throw new Error('Drive保存の形式が不正です');
+  validateCloudPlan_(JSON.stringify(envelope.plan), envelope.includePrivate);
+  return envelope;
+}
+function validateCloudPlan_(text, includePrivate) {
+  const plan = parseCloudJson_(text);
+  const record = function (v) { return v && typeof v === 'object' && !Array.isArray(v); };
+  if (!record(plan) || plan.version !== 4 || !record(plan.meta) || !record(plan.classPlans) || !record(plan.events) || !record(plan.schoolCalendar) || !record(plan.preparations) || !['classes','subjects','tasks','curriculum','rooms','templates','travelRules','exportProfiles'].every(function (key) { return Array.isArray(plan[key]); })) throw new Error('v4週案の形式が不正です');
+  const clearSlot = function (slot) { if (slot) { slot.memo = ''; slot.reflection = { achievement: 'none', observations: '', nextSteps: '' }; } };
+  Object.values(plan.classPlans).forEach(function (cp) {
+    if (!record(cp) || !record(cp.weeks)) throw new Error('学級週案の形式が不正です');
+    Object.values(cp.weeks).forEach(function (week) {
+      if (!record(week) || !record(week.days)) throw new Error('週案の形式が不正です');
+      Object.values(week.days).forEach(function (day) {
+        if (!record(day) || !record(day.periods)) throw new Error('コマの形式が不正です');
+        if (!includePrivate) Object.values(day.periods).forEach(clearSlot);
+      });
+    });
+  });
+  if (!includePrivate) {
+    plan.tasks = [];
+    plan.curriculum.forEach(function (p) { if (!Array.isArray(p.units)) throw new Error('指導計画の形式が不正です');p.units.forEach(function (u) { u.researchNote = ''; }); });
+    plan.templates.forEach(function (t) { if (!record(t.days)) throw new Error('テンプレートの形式が不正です');Object.values(t.days).forEach(function (d) { if (!record(d.periods)) throw new Error('テンプレートの形式が不正です');Object.values(d.periods).forEach(clearSlot); }); });
+  }
+  return plan;
+}
+function parseCloudJson_(text) {
+  try { return JSON.parse(text); }
+  catch (error) { throw new Error('保存JSONの形式が不正です'); }
+}

@@ -25,9 +25,10 @@ input,select,textarea{font-family:inherit;box-sizing:border-box}
 @keyframes slideUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
 .slide-up{animation:slideUp 0.2s ease forwards}
 .app-header{flex-wrap:wrap}.app-body{min-width:0}.sidebar{overflow-y:auto!important}
-.view-tabs{display:flex;gap:2px}.view-tabs button{padding:6px 10px;border-radius:6px;font-size:12px;background:#F3F4F6;color:#374151}
+.view-tabs{display:flex;gap:2px;order:3;width:100%;overflow-x:auto;min-width:0;flex-shrink:0}.view-tabs button{white-space:nowrap;padding:6px 10px;border-radius:6px;font-size:12px;background:#F3F4F6;color:#374151}
 .view-tabs button[aria-selected="true"]{background:#137F76;color:white}
 .page-view{flex:1;min-width:0;overflow:auto;padding:18px;background:#fff}
+.page-view h3{font-size:14px;margin:20px 0 10px}.page-view p{margin:10px 0}.rule-row{padding:10px 0;border-bottom:1px solid #E5E7EB}.modal-actions{flex-wrap:wrap}.prep-row>strong,.prep-row>span{min-width:0;overflow-wrap:anywhere}.data-table select{max-width:210px}
 .page-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:16px}
 .page-toolbar h2{font-size:18px;margin-right:auto}.action{padding:7px 12px;background:#E8F5F1;color:#116655;border-radius:6px;font-size:12px;font-weight:700}
 .action:disabled{opacity:.5;cursor:default}.field{display:flex;flex-direction:column;gap:4px;font-size:12px;min-width:0}
@@ -131,7 +132,7 @@ const addDays=(d,n)=>{const x=new Date(d);x.setDate(x.getDate()+n);return x};
 const getMonday=d=>{const x=new Date(d);const day=x.getDay();const diff=day===0?-6:1-day;return addDays(x,diff)};
 const fmtMD=d=>`${d.getMonth()+1}/${d.getDate()}`;
 
-const STORAGE_KEY='weeklyPlan_v3';
+const STORAGE_KEY='weeklyPlan_v4';
 const isRecord=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
 const clone=v=>JSON.parse(JSON.stringify(v));
 const today=()=>toKey(new Date());
@@ -248,8 +249,8 @@ function migratePlan(legacy){
   }));
   return {version:3,meta:{teacherName:legacy.meta.teacherName,schoolYear:legacy.meta.schoolYear,role:'homeroom'},activeClassId,classes,classPlans,subjects:legacy.subjects,events:legacy.events,curriculum:legacy.curriculum,tasks:legacy.tasks.map(t=>({...t,classId:classes.find(c=>c.schoolYear===schoolYearOf(t.date)&&c.grade===legacy.meta.grade)?.id||null})),preparations:{}};
 }
-function createInitialState(){return migratePlan(createLegacyInitialState())}
-function normalizePlan(raw){
+function createV3InitialState(){return migratePlan(createLegacyInitialState())}
+function normalizeV3Plan(raw){
   if(raw?.version===1||raw?.version===2)return migratePlan(normalizeLegacyPlan(raw));
   if(!isRecord(raw)||raw.version!==3)throw new Error('対応していない保存形式です');
   if(!isRecord(raw.meta)||!['homeroom','specialist'].includes(raw.meta.role)||!Array.isArray(raw.classes)||!raw.classes.length||!isRecord(raw.classPlans))throw new Error('担当学級の形式が不正です');
@@ -303,18 +304,70 @@ function normalizePlan(raw){
   const activeClassId=ids.has(raw.activeClassId)?raw.activeClassId:classes.find(c=>c.schoolYear===base.meta.schoolYear)?.id||classes[0].id;
   return {version:3,meta:{teacherName:base.meta.teacherName,schoolYear:base.meta.schoolYear,role:raw.meta.role},activeClassId,classes,classPlans,subjects:base.subjects,events:base.events,curriculum:base.curriculum,tasks,preparations:clone(preparations)};
 }
+const emptyReflection=()=>({achievement:'none',observations:'',nextSteps:''});
+const defaultCalendar=()=>({confirmed:false,weeklyPeriods:[6,6,6,6,6],periodTimes:[['08:45','09:30'],['09:40','10:25'],['10:45','11:30'],['11:40','12:25'],['13:30','14:15'],['14:25','15:10']].map(([start,end])=>({start,end})),closedRanges:[],overrides:[]});
+const clockMinutes=time=>{if(typeof time!=='string'||!/^\d{2}:\d{2}$/.test(time))return null;const[h,m]=time.split(':').map(Number);return h<24&&m<60?h*60+m:null};
+function upgradeV4(base,raw={}){
+  const rooms=raw.rooms??[],travelRules=raw.travelRules??[],templates=raw.templates??[],exportProfiles=raw.exportProfiles??[];
+  if(![rooms,travelRules,templates,exportProfiles].every(Array.isArray))throw new Error('教室・テンプレート・出力設定の形式が不正です');
+  const roomIds=new Set();
+  rooms.forEach(r=>{if(!isRecord(r)||typeof r.id!=='string'||!r.id||roomIds.has(r.id)||typeof r.name!=='string'||!r.name.trim())throw new Error('教室ID・名称が不正です');roomIds.add(r.id)});
+  const normalizeReflection=r=>{
+    if(r!=null&&(!isRecord(r)||!['none','met','partial','retry'].includes(r.achievement)))throw new Error('振り返りの形式が不正です');
+    return {achievement:r?.achievement||'none',observations:String(r?.observations||''),nextSteps:String(r?.nextSteps||'')};
+  };
+  const normalizeSlot=s=>{
+    if(!s)return null;if(s.roomId!=null&&!roomIds.has(s.roomId))throw new Error('教室参照が不正です');
+    return {...s,roomId:s.roomId||null,reflection:normalizeReflection(s.reflection)};
+  };
+  Object.values(base.classPlans).forEach(cp=>Object.values(cp.weeks).forEach(w=>Object.values(w.days).forEach(d=>PERIODS.forEach(p=>{d.periods[p]=normalizeSlot(d.periods[p])}))));
+  const templateIds=new Set();
+  const normalizedTemplates=templates.map(t=>{
+    if(!isRecord(t)||typeof t.id!=='string'||!t.id||templateIds.has(t.id)||typeof t.name!=='string'||!t.name.trim()||!Number.isInteger(t.grade)||t.grade<1||t.grade>6||!isRecord(t.days))throw new Error('時間割テンプレートが不正です');
+    templateIds.add(t.id);const days={};
+    WEEKDAYS.forEach((_,i)=>{
+      const d=t.days[String(i)];if(!isRecord(d)||!isRecord(d.periods))throw new Error('テンプレートの曜日・コマが不正です');
+      const periods={};PERIODS.forEach(p=>{
+        const s=d.periods[p];if(!s){periods[p]=null;return}
+        if(!isRecord(s)||!base.subjects.some(v=>v.id===s.subjectId)||!Number.isFinite(s.minutes)||s.minutes<=0||s.minutes>180)throw new Error('テンプレートの教科・分数が不正です');
+        periods[p]=templateSlot(normalizeSlot(s),false);
+      });days[i]={gyozen:{text:String(d.gyozen?.text||'')},periods};
+    });return {...t,name:t.name.trim(),days};
+  });
+  const classes=base.classes.map(c=>{
+    if(c.defaultRoomId!=null&&!roomIds.has(c.defaultRoomId))throw new Error('学級の教室参照が不正です');
+    const template=normalizedTemplates.find(t=>t.id===c.forecastTemplateId);
+    if(c.forecastTemplateId!=null&&(!template||template.grade!==c.grade))throw new Error('予測用テンプレートの参照が不正です');
+    return {...c,defaultRoomId:c.defaultRoomId||null,forecastTemplateId:c.forecastTemplateId||null};
+  });
+  const cal=raw.schoolCalendar??defaultCalendar();
+  if(!isRecord(cal)||typeof cal.confirmed!=='boolean'||!Array.isArray(cal.weeklyPeriods)||cal.weeklyPeriods.length!==5||cal.weeklyPeriods.some(n=>!Number.isInteger(n)||n<0||n>6)||!Array.isArray(cal.periodTimes)||cal.periodTimes.length!==6||!Array.isArray(cal.closedRanges)||!Array.isArray(cal.overrides))throw new Error('学校暦の形式が不正です');
+  let end=-1;cal.periodTimes.forEach(t=>{const a=clockMinutes(t.start),b=clockMinutes(t.end);if(a==null||b==null||a>=b||a<end)throw new Error('校時は開始・終了順で指定してください');end=b});
+  const gradeOK=g=>g===null||(Number.isInteger(g)&&g>=1&&g<=6);
+  const calendarIds=new Set();cal.closedRanges.forEach(r=>{if(!isRecord(r)||typeof r.id!=='string'||calendarIds.has(r.id)||typeof r.title!=='string'||!validDate(r.startDate)||!validDate(r.endDate)||r.startDate>r.endDate||!gradeOK(r.grade))throw new Error('休業期間が不正です');calendarIds.add(r.id)});
+  const dates=new Set();cal.overrides.forEach(o=>{const key=`${o.date}|${o.grade}`;if(!isRecord(o)||typeof o.id!=='string'||calendarIds.has(o.id)||!validDate(o.date)||!gradeOK(o.grade)||dates.has(key)||!Array.isArray(o.periods)||new Set(o.periods).size!==o.periods.length||o.periods.some(p=>!PERIODS.includes(p))||!Number.isFinite(o.minutes)||o.minutes<=0||o.minutes>180)throw new Error('短縮日・特別校時が不正です');dates.add(key);calendarIds.add(o.id)});
+  const routes=new Set();travelRules.forEach(r=>{const key=[r.fromId,r.toId].sort().join('|');if(!roomIds.has(r.fromId)||!roomIds.has(r.toId)||r.fromId===r.toId||routes.has(key)||!Number.isFinite(r.minutes)||r.minutes<0||r.minutes>180)throw new Error('移動時間の設定が不正です');routes.add(key)});
+  const profileIds=new Set();exportProfiles.forEach(p=>{if(!isRecord(p)||typeof p.id!=='string'||profileIds.has(p.id)||typeof p.name!=='string'||!p.name.trim()||!['week','hours'].includes(p.kind)||typeof p.sheetName!=='string'||!isRecord(p.settings))throw new Error('Excel出力設定が不正です');profileIds.add(p.id)});
+  base.curriculum.forEach(c=>c.units.forEach(u=>{u.researchNote=String(u.researchNote||'')}));
+  return {...base,version:4,classes,rooms:rooms.map(r=>({...r,building:String(r.building||''),floor:String(r.floor||'')})),travelRules:clone(travelRules),templates:normalizedTemplates,schoolCalendar:clone(cal),exportProfiles:clone(exportProfiles)};
+}
+function createInitialState(){return upgradeV4(createV3InitialState())}
+function normalizePlan(raw){
+  if(!isRecord(raw)||![1,2,3,4].includes(raw.version))throw new Error('対応していない保存形式です');
+  return upgradeV4(normalizeV3Plan({...raw,version:raw.version===4?3:raw.version}),raw.version===4?raw:{});
+}
 function savePlan(state){
-  // TODO(第3層): 本人のDrive保存アダプター。メモ送信は明示的な設定が必要。
+  // 端末保存と任意のDriveアダプターを分離し、通信失敗で端末保存を止めない。
   localStorage.setItem(STORAGE_KEY,JSON.stringify(state));
 }
 function loadPlan(){
   try{
     const current=localStorage.getItem(STORAGE_KEY);
-    const legacy=current==null?(localStorage.getItem('weeklyPlan_v2')??localStorage.getItem('weeklyPlan_v1')):null;
+    const legacy=current==null?(localStorage.getItem('weeklyPlan_v3')??localStorage.getItem('weeklyPlan_v2')??localStorage.getItem('weeklyPlan_v1')):null;
     const raw=current??legacy;
     if(raw===null)return {plan:createInitialState(),error:'',blocked:false,migrated:false};
     const parsed=JSON.parse(raw);
-    return {plan:normalizePlan(parsed),error:'',blocked:false,migrated:parsed.version!==3};
+    return {plan:normalizePlan(parsed),error:'',blocked:false,migrated:parsed.version!==4};
   }catch(e){return {plan:createInitialState(),error:`保存データを読み込めません: ${e.message}`,blocked:true,migrated:false}}
 }
 function downloadText(name,text,type='application/json'){
@@ -322,7 +375,7 @@ function downloadText(name,text,type='application/json'){
   const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 function exportSavedOriginal(){
-  try{downloadText('weekly-plan-original.json',localStorage.getItem(STORAGE_KEY)||localStorage.getItem('weeklyPlan_v2')||localStorage.getItem('weeklyPlan_v1')||'{}')}catch(e){alert(e.message)}
+  try{downloadText('weekly-plan-original.json',localStorage.getItem(STORAGE_KEY)||localStorage.getItem('weeklyPlan_v3')||localStorage.getItem('weeklyPlan_v2')||localStorage.getItem('weeklyPlan_v1')||'{}')}catch(e){alert(e.message)}
 }
 
 /* TODO(第3層): tasks を Googleタスクと同期（loadTasks/saveTasks を差し替え） */
@@ -383,7 +436,7 @@ function rescheduleCandidates(state,origin,startDate,endDate,todayKey=today()){
     const date=toKey(d);
     PERIODS.forEach(period=>{
       const ref={classId:c.id,date,period};
-      if(!getLesson(state.classPlans,ref)&&!eventBlocks(state.events,date,period,c.grade)&&!teacherConflicts(state,date,period).length)result.push(ref);
+      if(!getLesson(state.classPlans,ref)&&availablePeriodMinutes(state,date,period,c.grade)>0&&!teacherConflicts(state,date,period).length)result.push(ref);
     });
   }
   return result;
@@ -413,7 +466,7 @@ function rescheduleLesson(state,origin,target,todayKey=today()){
   if(!c||source?.lessonId!==origin.lessonId||source?.status!=='cancelled'||source.rescheduledTo)throw new Error('振替元が変更済み、または振替済みです');
   if(target.classId!==origin.classId||!rescheduleCandidates(state,origin,target.date,target.date,todayKey).some(r=>r.period===target.period))throw new Error('候補は現在利用できません。予定・行事・担当授業を確認してください');
   const next=clone(state.classPlans),lessonId=uid();
-  writeLesson(next,c,target,{...clone(source),lessonId,status:'planned',cancelReason:'',rescheduledFrom:{...origin},rescheduledTo:null});
+  writeLesson(next,c,target,{...clone(source),lessonId,status:'planned',minutes:Math.min(source.minutes,availablePeriodMinutes(state,target.date,target.period,c.grade)),cancelReason:'',reflection:emptyReflection(),rescheduledFrom:{...origin},rescheduledTo:null});
   getLesson(next,origin).rescheduledTo={...target,lessonId};return next;
 }
 function copyClassWeek(state,classId,key){
@@ -431,7 +484,7 @@ function copyClassWeek(state,classId,key){
   Object.entries(prev.days).forEach(([date,day])=>{
     const newDate=toKey(addDays(parseKey(date),7));if(!inSchoolYear(newDate,c.schoolYear))return;
     const copied=clone(day);
-    PERIODS.forEach(p=>{const s=copied.periods[p];if(s)Object.assign(s,{lessonId:uid(),status:'planned',cancelReason:'',rescheduledFrom:null,rescheduledTo:null})});
+    PERIODS.forEach(p=>{const s=copied.periods[p];if(s)Object.assign(s,{lessonId:uid(),status:'planned',cancelReason:'',rescheduledFrom:null,rescheduledTo:null,reflection:emptyReflection()})});
     days[newDate]=copied;
   });
   if(!Object.keys(days).length)throw new Error('コピー先は選択学級の年度外です');
@@ -469,7 +522,142 @@ function encodeCSV(rows){
   };
   return '\uFEFF'+[CSV_HEADERS,...rows].map(row=>row.map(escape).join(',')).join('\r\n')+'\r\n';
 }
-// TODO(学校暦): rescheduleCandidatesへ校時・休業期間・他教員の占有情報を注入する。
+function historySignature(plan){return JSON.stringify({...plan,activeClassId:null,meta:{...plan.meta,schoolYear:null}})}
+function recordHistory(history,plan,tag='',now=Date.now()){
+  if(historySignature(history.present)===historySignature(plan))return {...history,present:plan};
+  const coalesce=tag&&history.tag===tag&&now-history.time<700;
+  let past=coalesce?history.past:[...history.past,history.present];
+  past=past.slice(-30);
+  while(past.length>1&&past.reduce((n,p)=>n+JSON.stringify(p).length*2,0)>20*1024*1024)past=past.slice(1);
+  return {past,present:plan,future:[],tag,time:now};
+}
+function travelHistory(history,direction){
+  if(direction==='undo'&&history.past.length)return {past:history.past.slice(0,-1),present:history.past.at(-1),future:[history.present,...history.future],tag:'',time:0};
+  if(direction==='redo'&&history.future.length)return {past:[...history.past,history.present],present:history.future[0],future:history.future.slice(1),tag:'',time:0};
+  return history;
+}
+function templateSlot(s,layoutOnly){
+  if(!s)return null;
+  return {subjectId:s.subjectId,unit:layoutOnly?'':String(s.unit||''),sub:layoutOnly?'':String(s.sub||''),items:layoutOnly?'':String(s.items||''),memo:'',status:'planned',minutes:s.minutes||45,curriculumUnitId:null,roomId:s.roomId||null,reflection:emptyReflection(),cancelReason:'',rescheduledFrom:null,rescheduledTo:null};
+}
+function createWeekTemplate(state,classId,key,name,layoutOnly=true){
+  const c=state.classes.find(c=>c.id===classId);if(!c||!name.trim())throw new Error('学級とテンプレート名を指定してください');
+  const week=state.classPlans[classId]?.weeks[key],days={};
+  WEEKDAYS.forEach((_,i)=>{
+    const d=week?.days[toKey(addDays(parseKey(key),i))];
+    days[i]={gyozen:{text:d?.gyozen?.text||''},periods:Object.fromEntries(PERIODS.map(p=>[p,templateSlot(d?.periods[p],layoutOnly)]))};
+  });return {id:uid(),name:name.trim(),grade:c.grade,days};
+}
+function applyWeekTemplate(state,classId,key,templateId,mode='empty'){
+  const c=state.classes.find(c=>c.id===classId),t=state.templates.find(t=>t.id===templateId);
+  if(!c||!t||c.grade!==t.grade||!validDate(key)||parseKey(key).getDay()!==1||!['empty','replace'].includes(mode))throw new Error('同学年のテンプレートと週を指定してください');
+  let classPlans=clone(state.classPlans);
+  WEEKDAYS.forEach((_,i)=>{
+    const date=toKey(addDays(parseKey(key),i));if(!inSchoolYear(date,c.schoolYear))return;
+    PERIODS.forEach(p=>{
+      const ref={classId,date,period:p},old=getLesson(classPlans,ref),source=t.days[i].periods[p];
+      if(mode==='empty'&&old)return;
+      if(old?.rescheduledTo)throw new Error('振替済みの中止記録をテンプレートで上書きできません');
+      if(source&&state.meta.role==='specialist'&&!c.subjectIds.includes(source.subjectId))throw new Error('担当外教科を含むテンプレートです');
+      // 既存の振替先参照は削除経由で解除し、テンプレートを別の授業IDとして配置する。
+      classPlans=replaceLesson({...state,classPlans},ref,null);
+      if(source)classPlans=replaceLesson({...state,classPlans},ref,{...templateSlot(source,false),lessonId:undefined});
+    });
+    const cp=classPlans[classId]||(classPlans[classId]={weeks:{}}),w=cp.weeks[key]||(cp.weeks[key]={weekStart:key,grade:c.grade,days:{}});
+    const d=w.days[date]||(w.days[date]={gyozen:{text:''},periods:{}});
+    if(mode==='replace'||!d.gyozen.text)d.gyozen={text:t.days[i].gyozen.text};
+  });return classPlans;
+}
+function bulkLessonCandidates(state,date,classIds){
+  if(!validDate(date)||date>today())return [];
+  return assignedLessons(state,schoolYearOf(date)).filter(s=>classIds.includes(s.classId)&&s.date===date&&s.status==='planned'&&s.minutes<=availablePeriodMinutes(state,date,s.period,s.grade));
+}
+function markLessonsDone(state,refs,todayKey=today()){
+  if(!Array.isArray(refs)||!refs.length)throw new Error('授業を選択してください');
+  const seen=new Set(),next=clone(state.classPlans);
+  refs.forEach(r=>{
+    const c=state.classes.find(c=>c.id===r.classId),s=getLesson(next,r);
+    if(!c||!s||s.lessonId!==r.lessonId||s.status!=='planned'||r.date>todayKey||!inSchoolYear(r.date,c.schoolYear)||seen.has(r.lessonId)||s.minutes>availablePeriodMinutes(state,r.date,r.period,c.grade)||(state.meta.role==='specialist'&&!c.subjectIds.includes(s.subjectId)))throw new Error('対象授業が変更済み、未来、中止、または学校暦・分数の対象外です');
+    seen.add(r.lessonId);s.status='done';
+  });return next;
+}
+function availablePeriodMinutes(state,date,period,grade){
+  if(!validDate(date)||!PERIODS.includes(period))return 0;
+  const cal=state.schoolCalendar||defaultCalendar(),day=parseKey(date).getDay(),matches=x=>x.grade==null||x.grade===grade;
+  if(cal.closedRanges.some(r=>matches(r)&&r.startDate<=date&&r.endDate>=date)||eventBlocks(state.events,date,period,grade))return 0;
+  const override=cal.overrides.find(o=>o.date===date&&o.grade===grade)||cal.overrides.find(o=>o.date===date&&o.grade==null);
+  if(override)return override.periods.includes(period)?override.minutes:0;
+  return day>=1&&day<=5&&Number(period)<=cal.weeklyPeriods[day-1]?45:0;
+}
+function forecastAllocations(state,asOf){
+  const allocations=new Map(),year=state.meta.schoolYear,start=[toKey(addDays(parseKey(asOf),1)),`${year}-04-01`].sort().at(-1);
+  for(let d=parseKey(start);inSchoolYear(toKey(d),year);d=addDays(d,1)){
+    const date=toKey(d),day=d.getDay()-1;
+    state.classes.filter(c=>c.schoolYear===year).forEach(c=>{
+      const t=state.templates.find(t=>t.id===c.forecastTemplateId&&t.grade===c.grade);
+      PERIODS.forEach(period=>{
+        const recorded=getLesson(state.classPlans,{classId:c.id,date,period}),s=recorded||(day>=0&&day<5?t?.days[day]?.periods[period]:null);
+        if(!s||s.status==='cancelled'||(state.meta.role==='specialist'&&!c.subjectIds.includes(s.subjectId)))return;
+        const minutes=availablePeriodMinutes(state,date,period,c.grade);
+        const key=`${date}|${period}`;if(!allocations.has(key))allocations.set(key,[]);
+        allocations.get(key).push({classId:c.id,subjectId:s.subjectId,hours:Math.min(s.minutes||45,minutes)/45,blocked:minutes===0,explicit:!!recorded,date,period});
+      });
+    });
+  }return allocations;
+}
+function calculateForecast(state,classId,asOf=today()){
+  const c=state.classes.find(c=>c.id===classId);if(!c)throw new Error('学級がありません');
+  const template=state.templates.find(t=>t.id===c.forecastTemplateId),summary=calculateHourSummary({subjects:state.subjects,weeks:state.classPlans[classId]?.weeks||{},grade:c.grade,schoolYear:c.schoolYear,asOf,subjectIds:state.meta.role==='specialist'?c.subjectIds:null});
+  const projected=new Map(),allocations=forecastAllocations(state,asOf);let conflicts=0,blocked=0;
+  allocations.forEach(rows=>{
+    const valid=rows.filter(r=>!r.blocked),clash=state.meta.role==='specialist'&&valid.length>1;
+    rows.filter(r=>r.classId===classId).forEach(r=>{
+      if(r.blocked){if(r.explicit)blocked++;return}if(clash){conflicts++;return}
+      projected.set(r.subjectId,(projected.get(r.subjectId)||0)+r.hours);
+    });
+  });
+  return {confirmed:state.schoolCalendar.confirmed,template:template?.name||null,conflicts,blocked,rows:summary.map(r=>{const future=projected.get(r.subject.id)||0;return {...r,future,forecast:r.actual+future,shortage:r.standard==null?null:Math.max(0,r.standard-r.actual-future)}})};
+}
+function effectiveRoom(state,lesson){return lesson.roomId||state.classes.find(c=>c.id===lesson.classId)?.defaultRoomId||null}
+function roomAndTravelWarnings(state,weekStart){
+  const end=toKey(addDays(parseKey(weekStart),4)),slots=assignedLessons(state).filter(s=>s.status!=='cancelled'&&s.date>=weekStart&&s.date<=end).map(s=>({...s,roomId:effectiveRoom(state,s)}));
+  const clashes=[];slots.forEach(s=>{
+    const group=slots.filter(o=>o.date===s.date&&o.period===s.period&&o.roomId&&o.roomId===s.roomId);
+    if(group.length>1&&!clashes.some(g=>g[0].date===s.date&&g[0].period===s.period&&g[0].roomId===s.roomId))clashes.push(group);
+  });
+  const moves=[];
+  WEEKDAYS.forEach((_,i)=>{
+    const date=toKey(addDays(parseKey(weekStart),i));
+    for(let p=1;p<6;p++){
+      const before=slots.filter(s=>s.date===date&&s.period===String(p)),after=slots.filter(s=>s.date===date&&s.period===String(p+1));
+      if(before.length!==1||after.length!==1)continue;
+      const a=before[0],b=after[0];if(!a.roomId||!b.roomId||a.roomId===b.roomId)continue;
+      const rule=state.travelRules.find(r=>(r.fromId===a.roomId&&r.toId===b.roomId)||(r.fromId===b.roomId&&r.toId===a.roomId));
+      const times=state.schoolCalendar.periodTimes,gap=clockMinutes(times[p].start)-clockMinutes(times[p-1].end);
+      moves.push({date,period:String(p),fromId:a.roomId,toId:b.roomId,required:rule?.minutes??null,gap:state.schoolCalendar.confirmed?gap:null,warning:!state.schoolCalendar.confirmed?'校時未確認':!rule?'移動時間未設定':rule.minutes>gap?'移動時間不足':'移動可能'});
+    }
+  });return {slots,clashes,moves};
+}
+function cloudPlanPayload(state,includePrivate=false){
+  const data=clone(state);
+  if(!includePrivate){
+    data.tasks=[];
+    Object.values(data.classPlans).forEach(cp=>Object.values(cp.weeks).forEach(w=>Object.values(w.days).forEach(d=>Object.values(d.periods).forEach(s=>{if(s){s.memo='';s.reflection=emptyReflection()}}))));
+    data.curriculum.forEach(c=>c.units.forEach(u=>{u.researchNote=''}));
+  }return data;
+}
+function mergeCloudPrivate(remote,local,includePrivate){
+  const data=cloudPlanPayload(remote,includePrivate);if(includePrivate)return data;
+  const slots=new Map();Object.values(local.classPlans).forEach(cp=>Object.values(cp.weeks).forEach(w=>Object.values(w.days).forEach(d=>Object.values(d.periods).forEach(s=>{if(s)slots.set(s.lessonId,s)}))));
+  Object.values(data.classPlans).forEach(cp=>Object.values(cp.weeks).forEach(w=>Object.values(w.days).forEach(d=>Object.values(d.periods).forEach(s=>{const old=s&&slots.get(s.lessonId);if(old){s.memo=old.memo;s.reflection=clone(old.reflection||emptyReflection())}}))));
+  data.tasks=local.tasks.map(t=>({...t,classId:data.classes.some(c=>c.id===t.classId)?t.classId:null}));
+  data.curriculum.forEach(c=>c.units.forEach(u=>{u.researchNote=local.curriculum.find(p=>p.id===c.id)?.units.find(v=>v.id===u.id)?.researchNote||''}));
+  return data;
+}
+function callGas(method,payload){
+  const allowed=['getCloudStatus','loadCloudPlan','saveCloudPlan','listCloudBackups','loadCloudBackup'];
+  return new Promise((resolve,reject)=>{if(!allowed.includes(method)||!globalThis.google?.script?.run){reject(new Error('この機能は認可済みGAS版で利用できます'));return}const runner=google.script.run.withSuccessHandler(resolve).withFailureHandler(reject);if(payload===undefined)runner[method]();else runner[method](payload)});
+}
 // TODO(準備): 数量・在庫はitemsの文字列から推測せず別データで管理する。
 
 function HourCounterPanel({summary,grade}){
@@ -586,6 +774,72 @@ function mergeEvents(previous,entries,mode,year){
   });
   return next;
 }
+function parseHorizontalEventRows({rows,merges=[],start,end,blocks,year,type='school',source=''}){
+  const valid=[],rejected=[];
+  for(let i=start;i<=end;i++)blocks.forEach((b,blockIdx)=>{
+    const title=String(mergedValue(rows,merges,i,Number(b.titleCol))??'').trim();
+    if(!title)return;
+    const raw=String(mergedValue(rows,merges,i,Number(b.dayCol))??'').normalize('NFKC').trim();
+    const match=raw.match(/^(\d{1,2})(?:日)?(?:\s*[（(][月火水木金土日](?:曜)?[）)])?$/);
+    const date=match?parseExcelDate(`${b.month}/${Number(match[1])}`,year):null;
+    if(!date||!inSchoolYear(date,year)){rejected.push({row:i+1,block:blockIdx,reason:`${b.month}月の日付が不正`});return}
+    valid.push({id:stableId(`${date}|${type}|${title}`),date,title,type,source});
+  });return {valid,rejected};
+}
+const defaultExportSettings=kind=>kind==='week'?{headerStart:'B3',eventsStart:'B4',morningStart:'B5',lessonStart:'B6',rowStep:1,colStep:1,metaCells:{schoolYear:'A1',classLabel:'B1',teacherName:'D1',weekStart:'B2'},includeMemo:false}:{headerStart:'A1',columns:[0,2,3,4,8,10,12,13],writeHeaders:true};
+function cellPosition(address){
+  const m=String(address).toUpperCase().match(/^([A-Z]{1,3})([1-9]\d{0,4})$/);if(!m)throw new Error(`セル番地が不正です: ${address}`);
+  let col=0;for(const c of m[1])col=col*26+c.charCodeAt(0)-64;
+  const row=Number(m[2])-1;if(col>200||row>=20000)throw new Error('差込範囲は200列・20,000行以内です');return {r:row,c:col-1};
+}
+function cellAddress({r,c}){let col=c+1,text='';while(col){col--;text=String.fromCharCode(65+col%26)+text;col=Math.floor(col/26)}return text+(r+1)}
+function workbookExportCells(state,{kind,classId,weekStart,settings,startDate,endDate,asOf=today(),allClasses=false}){
+  const c=state.classes.find(c=>c.id===classId),cells=[];
+  const write=(address,value)=>{const pos=cellPosition(address);if(cells.some(v=>v.address===cellAddress(pos)))throw new Error(`差込位置が重複しています: ${address}`);cells.push({address:cellAddress(pos),value})};
+  if(kind==='week'){
+    if(!c||!validDate(weekStart)||parseKey(weekStart).getDay()!==1)throw new Error('学級と週を指定してください');
+    if(![settings.rowStep,settings.colStep].every(n=>Number.isInteger(n)&&n>=1&&n<=20))throw new Error('行・列の間隔は1〜20で指定してください');
+    const metas={schoolYear:c.schoolYear,classLabel:classLabel(c),teacherName:state.meta.teacherName,weekStart};
+    Object.entries(settings.metaCells||{}).forEach(([key,address])=>{if(address)write(address,metas[key]??'')});
+    const week=state.classPlans[classId]?.weeks[weekStart];
+    WEEKDAYS.forEach((day,i)=>{
+      const date=toKey(addDays(parseKey(weekStart),i)),d=week?.days[date];
+      const at=(anchor,row=0)=>{const p=cellPosition(anchor);return cellAddress({r:p.r+row,c:p.c+i*settings.colStep})};
+      if(settings.headerStart)write(at(settings.headerStart),`${day} ${date}`);
+      if(settings.eventsStart)write(at(settings.eventsStart),(state.events[date]||[]).filter(e=>e.grade==null||e.grade===c.grade).map(e=>e.title).join('\n'));
+      if(settings.morningStart)write(at(settings.morningStart),d?.gyozen?.text||'');
+      PERIODS.forEach((p,j)=>{
+        const s=d?.periods[p],room=s&&state.rooms.find(r=>r.id===(s.roomId||c.defaultRoomId));
+        const text=s?[state.subjects.find(v=>v.id===s.subjectId)?.name||s.subjectId,s.status==='cancelled'?'中止':s.status==='done'?'実施済み':'',s.unit,s.sub,s.items&&`持ち物: ${s.items}`,room&&`教室: ${room.name}`,settings.includeMemo&&s.memo].filter(Boolean).join('\n'):'';
+        write(at(settings.lessonStart,j*settings.rowStep),text);
+      });
+    });
+  }else{
+    if(!Array.isArray(settings.columns)||!settings.columns.length||new Set(settings.columns).size!==settings.columns.length||settings.columns.some(n=>!Number.isInteger(n)||n<0||n>=CSV_HEADERS.length))throw new Error('出力列を指定してください');
+    const classIds=allClasses?state.classes.filter(c=>c.schoolYear===state.meta.schoolYear).map(c=>c.id):[classId];
+    const rows=hourReportRows(state,{classIds,startDate,endDate,asOf}),base=cellPosition(settings.headerStart);
+    const table=settings.writeHeaders?[CSV_HEADERS,...rows]:rows;
+    table.forEach((row,i)=>settings.columns.forEach((column,j)=>write(cellAddress({r:base.r+i,c:base.c+j}),row[column])));
+  }return cells;
+}
+function fillWorkbook(workbook,sheetName,cells,lib=globalThis.XLSX){
+  if(!lib)throw new Error('Excelライブラリを読み込めません');
+  const wb=workbook?clone(workbook):lib.utils.book_new();
+  if(!wb.Sheets[sheetName]){if(workbook)throw new Error('指定シートがありません');lib.utils.book_append_sheet(wb,lib.utils.aoa_to_sheet([]),sheetName)}
+  const ws=wb.Sheets[sheetName],merges=ws['!merges']||[];
+  cells.forEach(v=>{
+    const p=cellPosition(v.address),m=merges.find(m=>p.r>=m.s.r&&p.r<=m.e.r&&p.c>=m.s.c&&p.c<=m.e.c);
+    if(m&&(p.r!==m.s.r||p.c!==m.s.c))throw new Error(`${v.address} は結合セルの左上ではありません`);
+    if(ws[v.address]?.f)throw new Error(`${v.address} に数式があります。差込位置を変更してください`);
+  });
+  let range=ws['!ref']?lib.utils.decode_range(ws['!ref']):null;
+  cells.forEach(({address,value})=>{
+    const p=cellPosition(address),old=ws[address]||{};
+    ws[address]={t:typeof value==='number'?'n':'s',v:value,s:old.s||{alignment:{wrapText:true,vertical:'top'}}};
+    range=range?{s:{r:Math.min(range.s.r,p.r),c:Math.min(range.s.c,p.c)},e:{r:Math.max(range.e.r,p.r),c:Math.max(range.e.c,p.c)}}:{s:{...p},e:{...p}};
+  });if(range)ws['!ref']=lib.utils.encode_range(range);
+  return wb;
+}
 function Modal({title,onClose,children}){
   const ref=useRef(null);
   useEffect(()=>{
@@ -611,18 +865,21 @@ function ExcelImportModal({onClose,onImport,kind='events',meta,subjects}){
   const[workbook,setWorkbook]=useState(null),[sheet,setSheet]=useState(''),[source,setSource]=useState(''),[error,setError]=useState('');
   const[header,setHeader]=useState(1),[lastRow,setLastRow]=useState(1),[mapping,setMapping]=useState({date:'',month:'',day:'',title:'',hours:''});
   const[dateMode,setDateMode]=useState('date'),[mode,setMode]=useState('merge'),[type,setType]=useState('school');
+  const[blocks,setBlocks]=useState([{month:4,dayCol:'',titleCol:''}]);
   const[subjectId,setSubjectId]=useState('sansu'),[publisher,setPublisher]=useState(''),[textbook,setTextbook]=useState('');
   const isCurriculum=kind==='curriculum';
   const rows=useMemo(()=>workbook&&sheet?XLSX.utils.sheet_to_json(workbook.Sheets[sheet],{header:1,range:0,raw:true,defval:null,blankrows:true}):[],[workbook,sheet]);
   const columns=rows.length?Array.from({length:Math.max(...rows.map(r=>r.length))},(_,i)=>`${XLSX.utils.encode_col(i)}: ${String(rows[header-1]?.[i]??'').slice(0,50)}`):[];
   const planId=stableId(`${meta.schoolYear}|${meta.grade}|${subjectId}`);
-  const required=isCurriculum?['title','hours']:dateMode==='split'?['month','day','title']:['date','title'];
-  const ready=rows.length>0&&required.every(k=>mapping[k]!=='')&&new Set(required.map(k=>mapping[k])).size===required.length&&header>=1&&header<lastRow&&lastRow<=rows.length;
+  const horizontal=!isCurriculum&&dateMode==='horizontal';
+  const required=isCurriculum?['title','hours']:horizontal?[]:dateMode==='split'?['month','day','title']:['date','title'];
+  const ready=rows.length>0&&required.every(k=>mapping[k]!=='')&&new Set(required.map(k=>mapping[k])).size===required.length&&(!horizontal||(blocks.length>0&&blocks.every(b=>b.dayCol!==''&&b.titleCol!==''&&b.dayCol!==b.titleCol)))&&header>=1&&header<lastRow&&lastRow<=rows.length;
   const preview=useMemo(()=>{
     if(!ready)return {valid:[],rejected:[]};
     const options={rows,merges:workbook.Sheets[sheet]['!merges']||[],start:header,end:lastRow-1,titleCol:mapping.title,monthCol:mapping.month};
+    if(horizontal)return parseHorizontalEventRows({...options,blocks,year:meta.schoolYear,type,source});
     return isCurriculum?parseCurriculumRows({...options,hoursCol:mapping.hours,planId}):parseEventRows({...options,dateCol:mapping.date,dayCol:mapping.day,dateMode,year:meta.schoolYear,date1904:!!workbook.Workbook?.WBProps?.date1904,type,source});
-  },[rows,workbook,sheet,header,lastRow,mapping,ready,isCurriculum,planId,dateMode,meta.schoolYear,type,source]);
+  },[rows,workbook,sheet,header,lastRow,mapping,ready,isCurriculum,planId,dateMode,meta.schoolYear,type,source,horizontal,blocks]);
   const handleFile=async e=>{
     const file=e.target.files[0];if(!file)return;setError('');setWorkbook(null);
     try{
@@ -648,24 +905,24 @@ function ExcelImportModal({onClose,onImport,kind='events',meta,subjects}){
         <Field label="シート"><select value={sheet} onChange={e=>{setSheet(e.target.value);setMapping({date:'',month:'',day:'',title:'',hours:''});setHeader(1);setLastRow(XLSX.utils.sheet_to_json(workbook.Sheets[e.target.value],{header:1,range:0,blankrows:true}).length)}}>{workbook.SheetNames.map(n=><option key={n}>{n}</option>)}</select></Field>
         <Field label="見出し行"><input type="number" min="1" max={rows.length} value={header} onChange={e=>setHeader(Number(e.target.value))}/></Field>
         <Field label="最終データ行"><input type="number" min={header+1} max={rows.length} value={lastRow} onChange={e=>setLastRow(Number(e.target.value))}/></Field>
-        {!isCurriculum&&<Field label="日付形式"><select value={dateMode} onChange={e=>setDateMode(e.target.value)}><option value="date">日付列</option><option value="split">月・日を別の列から指定</option></select></Field>}
+        {!isCurriculum&&<Field label="日付形式"><select value={dateMode} onChange={e=>setDateMode(e.target.value)}><option value="date">日付列</option><option value="split">月・日を別の列から指定</option><option value="horizontal">横型・月別ブロック</option></select></Field>}
         {isCurriculum?<>
           <Field label="教科"><select value={subjectId} onChange={e=>setSubjectId(e.target.value)}>{subjects.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></Field>
           <Field label="出版社"><input value={publisher} onChange={e=>setPublisher(e.target.value)}/></Field>
           <Field label="教科書名・版"><input value={textbook} onChange={e=>setTextbook(e.target.value)}/></Field>
           {colSelect('title','単元名の列')}{colSelect('hours','配当時数の列')}{colSelect('month','予定月の列（任意）')}
         </>:<>
-          {dateMode==='date'?colSelect('date','日付の列'):<>{colSelect('month','月の列')}{colSelect('day','日の列')}</>}
-          {colSelect('title','行事名の列')}
+          {!horizontal&&<>{dateMode==='date'?colSelect('date','日付の列'):<>{colSelect('month','月の列')}{colSelect('day','日の列')}</>}{colSelect('title','行事名の列')}</>}
           <Field label="行事種別"><select value={type} onChange={e=>setType(e.target.value)}><option value="school">学校行事</option><option value="gakunen">学年行事</option><option value="holiday">休業日</option></select></Field>
           <Field label="取込方法"><select value={mode} onChange={e=>setMode(e.target.value)}><option value="merge">追加（重複除外）</option><option value="replace">選択年度の行事を置換</option></select></Field>
         </>}
       </div>
+      {horizontal&&<><h3>月別ブロック</h3>{blocks.map((b,i)=><div key={i} className="fields"><Field label={`ブロック${i+1} 月`}><select value={b.month} onChange={e=>setBlocks(prev=>prev.map((v,j)=>j===i?{...v,month:Number(e.target.value)}:v))}>{[4,5,6,7,8,9,10,11,12,1,2,3].map(m=><option key={m} value={m}>{m}月</option>)}</select></Field>{[['dayCol','日列'],['titleCol','行事列']].map(([key,label])=><Field key={key} label={`ブロック${i+1} ${label}`}><select value={b[key]} onChange={e=>setBlocks(prev=>prev.map((v,j)=>j===i?{...v,[key]:e.target.value}:v))}><option value="">未指定</option>{columns.map((label,j)=><option key={j} value={j}>{label}</option>)}</select></Field>)}<button className="action" onClick={()=>setBlocks(prev=>prev.filter((_,j)=>i!==j))}>ブロックを削除</button></div>)}<button className="action" disabled={blocks.length>=12} onClick={()=>setBlocks(prev=>[...prev,{month:[4,5,6,7,8,9,10,11,12,1,2,3][prev.length],dayCol:'',titleCol:''}])}>月ブロックを追加</button></>}
       <div className="table-scroll" style={{maxHeight:140}}><table className="data-table"><tbody>{rows.slice(Math.max(0,header-1),header+3).map((r,i)=><tr key={i}><th>{header+i}</th>{columns.map((_,j)=><td key={j}>{String(r[j]??'').slice(0,60)}</td>)}</tr>)}</tbody></table></div>
       <p style={{fontSize:12,margin:'12px 0'}}>有効 {preview.valid.length}件 / 除外 {preview.rejected.length}件</p>
       <div style={{maxHeight:160,overflow:'auto'}}>
         {preview.valid.slice(0,20).map((p,i)=><div key={i} style={{fontSize:12,padding:3}}>{isCurriculum?`${p.month?p.month+'月':'月未設定'} / ${p.plannedHours}時`:p.date}　{p.title}</div>)}
-        {preview.rejected.slice(0,15).map(r=><div key={r.row} className="error-text">{r.row}行: {r.reason}</div>)}
+        {preview.rejected.slice(0,15).map((r,i)=><div key={i} className="error-text">{r.row}行: {r.reason}</div>)}
       </div>
       {isCurriculum&&<p className="muted">同年度・学年・教科の指導計画は置き換えられます。</p>}
     </>}
@@ -678,7 +935,7 @@ function ExcelImportModal({onClose,onImport,kind='events',meta,subjects}){
 /* ════════════════════════════════════════════════
    コマ編集ポップアップ
 ════════════════════════════════════════════════ */
-function CellEditor({cell,subjects,grade,curriculum,schoolYear,onSave,onClose,onDelete,onReschedule}){
+function CellEditor({cell,subjects,grade,curriculum,schoolYear,rooms=[],defaultRoomId,onSave,onClose,onDelete,onReschedule}){
   const[subjectId,setSubjectId]=useState(cell.data?.subjectId||'');
   const[unit,setUnit]=useState(cell.data?.unit||'');
   const[sub,setSub]=useState(cell.data?.sub||'');
@@ -691,6 +948,8 @@ function CellEditor({cell,subjects,grade,curriculum,schoolYear,onSave,onClose,on
   const[unitId,setUnitId]=useState(cell.data?.curriculumUnitId||'');
   const[error,setError]=useState('');
   const[cancelReason,setCancelReason]=useState(cell.data?.cancelReason||'');
+  const[roomId,setRoomId]=useState(cell.data?.roomId||'');
+  const[reflection,setReflection]=useState(cell.data?.reflection||emptyReflection());
 
   const subj=subjects.find(s=>s.id===subjectId);
   const units=curriculum.filter(c=>c.subjectId===subjectId&&c.grade===grade&&c.schoolYear===schoolYear).flatMap(c=>c.units);
@@ -706,7 +965,7 @@ function CellEditor({cell,subjects,grade,curriculum,schoolYear,onSave,onClose,on
     if(!subjectId){setError('教科を選択してください');return}
     if(!Number.isFinite(Number(minutes))||minutes<=0||minutes>180){setError('授業分数は1〜180分で指定してください');return}
     if(status==='done'&&cell.dayKey>today()){setError('未来の授業は実施済みにできません');return}
-    const data={subjectId,unit,sub,items,memo,status,minutes:Number(minutes),curriculumUnitId:unitId||null,cancelReason:status==='cancelled'?cancelReason:''};
+    const data={subjectId,unit,sub,items,memo,status,minutes:Number(minutes),curriculumUnitId:unitId||null,cancelReason:status==='cancelled'?cancelReason:'',roomId:roomId||null,reflection};
     try{if(openCandidates)onReschedule(data);else onSave(data)}catch(e){setError(e.message)}
   };
 
@@ -730,6 +989,7 @@ function CellEditor({cell,subjects,grade,curriculum,schoolYear,onSave,onClose,on
           <Field label="実施状態"><select value={status} onChange={e=>setStatus(e.target.value)}><option value="planned">計画</option><option value="done">実施済み</option><option value="cancelled">中止</option></select></Field>
           <Field label="授業分数"><input type="number" min="1" max="180" value={minutes} onChange={e=>setMinutes(e.target.value)}/></Field>
         </div>
+        <Field label="授業の教室"><select value={roomId} onChange={e=>setRoomId(e.target.value)}><option value="">学級の既定（{rooms.find(r=>r.id===defaultRoomId)?.name||'未設定'}）</option>{rooms.map(r=><option key={r.id} value={r.id}>{r.name}</option>)}</select></Field>
         <Field label="年間指導計画の単元"><select value={unitId} onChange={e=>{setUnitId(e.target.value);const selected=units.find(u=>u.id===e.target.value);if(selected)setUnit(selected.title)}}>
           <option value="">未紐付け</option>{unitId&&!linkedUnit&&<option value={unitId}>単元の再指定が必要</option>}{units.map(u=><option key={u.id} value={u.id}>{u.title}（{u.plannedHours}時）</option>)}
         </select></Field>
@@ -753,6 +1013,11 @@ function CellEditor({cell,subjects,grade,curriculum,schoolYear,onSave,onClose,on
         <label style={{fontSize:11,fontWeight:'800',color:'#6B7280',display:'block',marginBottom:4}}>メモ（児童の様子など）</label>
         <textarea value={memo} onChange={e=>setMemo(e.target.value)} rows={2} placeholder="例：△△さんがつまずいていた"
           style={{width:'100%',padding:8,borderRadius:9,border:'2px solid #E5E7EB',fontSize:13,marginBottom:14,outline:'none',resize:'vertical'}}/>
+        <details style={{marginBottom:14}}><summary>授業の振り返り</summary>
+          <Field label="本時の達成"><select value={reflection.achievement} onChange={e=>setReflection({...reflection,achievement:e.target.value})}><option value="none">未記録</option><option value="met">達成</option><option value="partial">一部達成</option><option value="retry">再指導が必要</option></select></Field>
+          <Field label="学びの様子"><textarea rows="3" value={reflection.observations} onChange={e=>setReflection({...reflection,observations:e.target.value})}/></Field>
+          <Field label="次の授業への改善"><textarea rows="3" value={reflection.nextSteps} onChange={e=>setReflection({...reflection,nextSteps:e.target.value})}/></Field>
+        </details>
 
         <div style={{background:'#F5F3FF',borderRadius:12,padding:12,marginBottom:14}}>
           <div style={{fontSize:11,fontWeight:'800',color:'#6D28D9',marginBottom:6}}>🤖 AIに授業づくりを相談</div>
@@ -858,11 +1123,14 @@ function calculateCurriculumProgress(plan,lessons,asOf,todayKey=today()){
   const datedActual=actual.filter(s=>datedIds.has(s.curriculumUnitId)).reduce((sum,s)=>sum+s.hours,0);
   return {rows,target,linked,datedActual,unlinked:actual.filter(s=>!known.has(s.curriculumUnitId)).reduce((sum,s)=>sum+s.hours,0),undated:plan.units.filter(u=>u.month==null).length};
 }
-function ResourceEditor({unit,onSave,onClose}){
+function ResourceEditor({unit,onSave,onNoteSave,onClose}){
   const[title,setTitle]=useState(''),[url,setUrl]=useState(''),[error,setError]=useState('');
+  const[note,setNote]=useState(unit.researchNote||'');
   return <Modal title={`${unit.title} の教材研究`} onClose={onClose}>
     {unit.resources.map((r,i)=><div key={i} className="resource-list"><a href={r.url} target="_blank" rel="noopener noreferrer">{r.title}</a><button className="action" onClick={()=>onSave(unit.resources.filter((_,j)=>j!==i))}>削除</button></div>)}
     <div className="fields"><Field label="リンク名"><input value={title} onChange={e=>setTitle(e.target.value)}/></Field><Field label="教材研究URL"><input type="url" value={url} onChange={e=>setUrl(e.target.value)}/></Field></div>
+    <Field label="教材研究ノート"><textarea rows="8" value={note} onChange={e=>setNote(e.target.value)}/></Field>
+    <button className="action" onClick={()=>onNoteSave(note)}>ノートを保存</button>
     {error&&<p className="error-text" role="alert">{error}</p>}
     <div className="modal-actions"><button className="action" onClick={onClose}>閉じる</button><button className="action" onClick={()=>{const safe=safeUrl(url);if(!safe){setError('http または https のURLを指定してください');return}onSave([...unit.resources,{title:title.trim()||safe,url:safe}]);setTitle('');setUrl('');setError('')}}>リンクを追加</button></div>
   </Modal>;
@@ -906,16 +1174,19 @@ function SettingsModal({meta,setMeta,state,onRestore,onClose,onEditClass,onAddCl
   </Modal>;
 }
 
-function ClassEditor({classData,schoolYear,subjects,defaultSubjectIds,onSave,onClose}){
+function ClassEditor({classData,schoolYear,subjects,defaultSubjectIds,rooms=[],templates=[],onSave,onClose}){
   const[grade,setGrade]=useState(classData?.grade||5),[className,setClassName]=useState(classData?.className||'');
   const[subjectIds,setSubjectIds]=useState(classData?.subjectIds||defaultSubjectIds),[error,setError]=useState('');
+  const[defaultRoomId,setRoomId]=useState(classData?.defaultRoomId||''),[forecastTemplateId,setTemplateId]=useState(classData?.forecastTemplateId||'');
   const toggle=id=>setSubjectIds(prev=>prev.includes(id)?prev.filter(v=>v!==id):[...prev,id]);
   return <Modal title={classData?'学級設定':'学級を追加'} onClose={onClose}>
     <div className="fields"><Field label="年度"><input value={schoolYear} readOnly/></Field><Field label="学年"><select value={grade} disabled={!!classData} onChange={e=>setGrade(Number(e.target.value))}>{[1,2,3,4,5,6].map(g=><option key={g} value={g}>{g}年</option>)}</select></Field><Field label="組"><input value={className} onChange={e=>setClassName(e.target.value)} maxLength={30}/></Field></div>
     <h3>担当教科</h3><div className="check-options">{subjects.map(s=><label key={s.id}><input type="checkbox" checked={subjectIds.includes(s.id)} onChange={()=>toggle(s.id)}/><span style={{borderLeft:`4px solid ${s.color}`,paddingLeft:4}}>{s.name}</span></label>)}</div>
     <button className="action" onClick={()=>setSubjectIds(subjects.map(s=>s.id))}>全教科を選択</button> <button className="action" onClick={()=>setSubjectIds([])}>選択を解除</button>
+    <Field label="学級の既定教室"><select value={defaultRoomId} onChange={e=>setRoomId(e.target.value)}><option value="">未設定</option>{rooms.map(r=><option key={r.id} value={r.id}>{r.name}</option>)}</select></Field>
+    <Field label="不足予測用の通常時間割"><select value={forecastTemplateId} onChange={e=>setTemplateId(e.target.value)}><option value="">未設定</option>{templates.filter(t=>t.grade===grade).map(t=><option key={t.id} value={t.id}>{t.name}</option>)}</select></Field>
     {error&&<p className="error-text" role="alert">{error}</p>}
-    <div className="modal-actions"><button className="action" onClick={onClose}>閉じる</button><button className="action" onClick={()=>{try{if(!className.trim()||!subjectIds.length)throw new Error('組と担当教科を指定してください');onSave({id:classData?.id||uid(),schoolYear,grade,className:className.trim(),subjectIds})}catch(e){setError(e.message)}}}>保存</button></div>
+    <div className="modal-actions"><button className="action" onClick={onClose}>閉じる</button><button className="action" onClick={()=>{try{if(!className.trim()||!subjectIds.length)throw new Error('組と担当教科を指定してください');onSave({id:classData?.id||uid(),schoolYear,grade,className:className.trim(),subjectIds,defaultRoomId:defaultRoomId||null,forecastTemplateId:forecastTemplateId||null})}catch(e){setError(e.message)}}}>保存</button></div>
   </Modal>;
 }
 function TeacherTimetable({state,weekStart,onEdit}){
@@ -925,7 +1196,7 @@ function TeacherTimetable({state,weekStart,onEdit}){
     <div className="teacher-grid"><div/>{days.map((d,i)=><div key={d} style={{fontSize:12,fontWeight:700,textAlign:'center'}}>{WEEKDAYS[i]}<br/>{fmtMD(parseKey(d))}</div>)}
       {PERIODS.map(p=><React.Fragment key={p}><div style={{textAlign:'center',fontSize:13,fontWeight:700}}>{p}</div>{days.map(date=>{
         const slots=lessons.filter(s=>s.date===date&&s.period===p);
-        return <div key={date} className={`teacher-cell ${slots.length>1?'conflict':''}`} data-date={date} data-period={p}>{slots.length>1&&<div className="error-text" style={{margin:0}}>重複 {slots.length}件</div>}{slots.map(s=><button key={s.lessonId} title={`${s.classLabel} ${s.unit}`} onClick={()=>onEdit(s)}><strong>{s.classLabel}</strong><span>{state.subjects.find(v=>v.id===s.subjectId)?.name||s.subjectId}</span></button>)}</div>;
+return <div key={date} className={`teacher-cell ${slots.length>1?'conflict':''}`} data-date={date} data-period={p}>{slots.length>1&&<div className="error-text" style={{margin:0}}>重複 {slots.length}件</div>}{slots.map(s=><button key={s.lessonId} title={`${s.classLabel} ${s.unit}`} onClick={()=>onEdit(s)}><strong>{s.classLabel}</strong><span>{state.subjects.find(v=>v.id===s.subjectId)?.name||s.subjectId}</span>{effectiveRoom(state,s)&&<span className="muted">{state.rooms.find(r=>r.id===effectiveRoom(state,s))?.name}</span>}</button>)}</div>;
       })}</React.Fragment>)}
     </div>
   </section>;
@@ -954,7 +1225,7 @@ function RescheduleModal({state,origin,onSave,onClose}){
     <div className="fields"><Field label="候補開始日"><input type="date" min={first} value={startDate} onChange={e=>{setStartDate(e.target.value);setSelected(null)}}/></Field><Field label="候補終了日"><input type="date" value={endDate} onChange={e=>{setEndDate(e.target.value);setSelected(null)}}/></Field></div>
     <p className="muted" style={{marginBottom:12}}>翌日以降・年度内・最大28日。未入力コマの候補です。学校の時間割と校時を確認してください。</p>
     {!candidates.length&&<p className="error-text">条件に合う候補がありません。期間・行事・担当授業を確認してください。</p>}
-    <div className="candidate-list" style={{maxHeight:270,overflowY:'auto'}}>{candidates.map(r=><button key={`${r.date}-${r.period}`} aria-pressed={selected?.date===r.date&&selected?.period===r.period} onClick={()=>setSelected(r)}>{r.date}（{WEEKDAYS[parseKey(r.date).getDay()-1]}）{r.period}限</button>)}</div>
+    <div className="candidate-list" style={{maxHeight:270,overflowY:'auto'}}>{candidates.map(r=><button key={`${r.date}-${r.period}`} aria-pressed={selected?.date===r.date&&selected?.period===r.period} onClick={()=>setSelected(r)}>{r.date}（{WEEKDAYS[parseKey(r.date).getDay()-1]}）{r.period}限 / {Math.min(source.minutes,availablePeriodMinutes(state,r.date,r.period,c.grade))}分</button>)}</div>
     {error&&<p className="error-text" role="alert">{error}</p>}
     <div className="modal-actions"><button className="action" onClick={onClose}>閉じる</button><button className="action" disabled={!selected} onClick={()=>{try{onSave(selected)}catch(e){setError(e.message)}}}>このコマに振り替える</button></div>
   </Modal>;
@@ -973,6 +1244,178 @@ function ReportModal({state,classId,onClose}){
 }
 
 /* メインアプリ: 保存境界以外は React state を正とする。 */
+function TemplateModal({state,classId,weekStart,onSave,onApply,onDelete,onClose}){
+  const[name,setName]=useState('通常週'),[layoutOnly,setLayoutOnly]=useState(true),[mode,setMode]=useState('empty'),[error,setError]=useState('');
+  const c=state.classes.find(c=>c.id===classId);
+  const attempt=fn=>{try{fn();setError('')}catch(e){setError(e.message)}};
+  return <Modal title="時間割テンプレート" onClose={onClose}>
+    <div className="fields"><Field label="保存する名前"><input value={name} onChange={e=>setName(e.target.value)}/></Field><label><input type="checkbox" checked={layoutOnly} onChange={e=>setLayoutOnly(e.target.checked)}/>教科・分数・教室だけ保存</label></div>
+    <p className="muted">実施状態・児童メモ・振り返り・振替履歴は引き継ぎません。</p>
+    <button className="action" onClick={()=>attempt(()=>{onSave(createWeekTemplate(state,classId,weekStart,name,layoutOnly));setName('')})}>現在週をテンプレート保存</button>
+    <Field label="適用方法"><select value={mode} onChange={e=>setMode(e.target.value)}><option value="empty">空きコマにだけ配置</option><option value="replace">週全体を置き換える</option></select></Field>
+    {state.templates.filter(t=>t.grade===c.grade).map(t=><div className="prep-row" key={t.id}><strong style={{flex:1}}>{t.name}</strong><button className="action" onClick={()=>attempt(()=>{if(mode==='replace'&&!confirm('今週の授業をテンプレートで置き換えますか？'))return;onApply(t.id,mode)})}>今週に適用</button><button className="action" onClick={()=>{if(confirm('テンプレートを削除しますか？不足予測の指定も解除します。'))onDelete(t.id)}}>削除</button></div>)}
+    {error&&<p className="error-text" role="alert">{error}</p>}
+    <div className="modal-actions"><button className="action" onClick={onClose}>閉じる</button></div>
+  </Modal>;
+}
+function BulkDoneModal({state,classId,weekStart,onSave,onClose}){
+  const[date,setDate]=useState(weekStart<=today()?toKey(addDays(parseKey(weekStart),Math.min(4,Math.floor((parseKey(today())-parseKey(weekStart))/86400000)))):today());
+  const[all,setAll]=useState(false),[selected,setSelected]=useState([]),[error,setError]=useState('');
+  const rows=bulkLessonCandidates(state,date,all?state.classes.filter(c=>c.schoolYear===state.meta.schoolYear).map(c=>c.id):[classId]);
+  const signature=rows.map(s=>s.lessonId).join('|');
+  useEffect(()=>setSelected(rows.map(s=>s.lessonId)),[signature,date,all]);
+  return <Modal title="授業の一括実施確認" onClose={onClose}>
+    <Field label="実施日"><input type="date" value={date} max={today()} min={`${state.meta.schoolYear}-04-01`} onChange={e=>setDate(e.target.value)}/></Field>
+    <label><input type="checkbox" checked={all} onChange={e=>setAll(e.target.checked)}/>全担当学級</label>
+    <p className="muted">学校暦・行事で授業不可のコマ、中止、実施済み、未来、校時より長い計画は対象外です。短縮日の分数は各コマで確認し、実際に授業をしたコマだけ選択してください。</p>
+    {rows.map(s=><label className="prep-row" key={s.lessonId}><input type="checkbox" checked={selected.includes(s.lessonId)} onChange={e=>setSelected(prev=>e.target.checked?[...prev,s.lessonId]:prev.filter(id=>id!==s.lessonId))}/><span>{s.classLabel} {s.period}限 {state.subjects.find(v=>v.id===s.subjectId)?.name} {s.unit}</span></label>)}
+    {!rows.length&&<p className="muted">対象の計画授業はありません。</p>}
+    {error&&<p className="error-text" role="alert">{error}</p>}
+    <div className="modal-actions"><button className="action" onClick={onClose}>キャンセル</button><button className="action" disabled={!selected.length} onClick={()=>{try{onSave(rows.filter(s=>selected.includes(s.lessonId)));onClose()}catch(e){setError(e.message)}}}>{selected.length}コマを実施済みにする</button></div>
+  </Modal>;
+}
+function SchoolCalendarView({state,classId,onSave,onTemplate}){
+  const[cal,setCal]=useState(()=>clone(state.schoolCalendar)),[error,setError]=useState('');
+  useEffect(()=>setCal(clone(state.schoolCalendar)),[state.schoolCalendar]);
+  const c=state.classes.find(c=>c.id===classId),forecast=useMemo(()=>calculateForecast(state,classId),[state,classId]);
+  const setRange=(id,patch)=>setCal(prev=>({...prev,closedRanges:prev.closedRanges.map(r=>r.id===id?{...r,...patch}:r)}));
+  const setOverride=(id,patch)=>setCal(prev=>({...prev,overrides:prev.overrides.map(r=>r.id===id?{...r,...patch}:r)}));
+  const gradeOptions=<><option value="">全学年</option>{[1,2,3,4,5,6].map(g=><option key={g} value={g}>{g}年</option>)}</>;
+  return <section className="page-view"><div className="page-toolbar"><h2>学校暦・年度末予測</h2><button className="action" onClick={()=>{try{onSave(normalizePlan({...state,schoolCalendar:cal}).schoolCalendar);setError('')}catch(e){setError(e.message)}}}>学校暦を保存</button></div>
+    {error&&<p className="error-text" role="alert">{error}</p>}
+    <h3>曜日ごとの授業数</h3><div className="fields">{WEEKDAYS.map((d,i)=><Field key={d} label={`${d}曜の限数`}><input type="number" min="0" max="6" value={cal.weeklyPeriods[i]} onChange={e=>setCal({...cal,weeklyPeriods:cal.weeklyPeriods.map((n,j)=>j===i?Number(e.target.value):n)})}/></Field>)}</div>
+    <h3>校時</h3><div className="table-scroll"><table className="data-table"><thead><tr><th>限</th><th>開始</th><th>終了</th></tr></thead><tbody>{cal.periodTimes.map((t,i)=><tr key={i}><td>{i+1}</td>{['start','end'].map(k=><td key={k}><input aria-label={`${i+1}限${k==='start'?'開始':'終了'}`} type="time" value={t[k]} onChange={e=>setCal({...cal,periodTimes:cal.periodTimes.map((v,j)=>j===i?{...v,[k]:e.target.value}:v)})}/></td>)}</tr>)}</tbody></table></div>
+    <h3>長期休業・授業のない期間</h3>
+    {cal.closedRanges.map(r=><div className="fields rule-row" key={r.id}><Field label="休業名"><input value={r.title} onChange={e=>setRange(r.id,{title:e.target.value})}/></Field><Field label="対象学年"><select value={r.grade??''} onChange={e=>setRange(r.id,{grade:e.target.value?Number(e.target.value):null})}>{gradeOptions}</select></Field><Field label="開始日"><input type="date" value={r.startDate} onChange={e=>setRange(r.id,{startDate:e.target.value})}/></Field><Field label="終了日"><input type="date" value={r.endDate} onChange={e=>setRange(r.id,{endDate:e.target.value})}/></Field><button className="action" onClick={()=>setCal({...cal,closedRanges:cal.closedRanges.filter(v=>v.id!==r.id)})}>期間を削除</button></div>)}
+    <button className="action" onClick={()=>setCal({...cal,closedRanges:[...cal.closedRanges,{id:uid(),title:'休業',grade:null,startDate:`${state.meta.schoolYear}-07-21`,endDate:`${state.meta.schoolYear}-08-31`}]})}>休業期間を追加</button>
+    <h3>短縮日・特別校時</h3>
+    {cal.overrides.map(o=><div className="rule-row" key={o.id}><div className="fields"><Field label="特別校時の日付"><input type="date" value={o.date} onChange={e=>setOverride(o.id,{date:e.target.value})}/></Field><Field label="特別校時の学年"><select value={o.grade??''} onChange={e=>setOverride(o.id,{grade:e.target.value?Number(e.target.value):null})}>{gradeOptions}</select></Field><Field label="1コマの分数"><input type="number" min="1" max="180" value={o.minutes} onChange={e=>setOverride(o.id,{minutes:Number(e.target.value)})}/></Field></div><div className="check-options">{PERIODS.map(p=><label key={p}><input type="checkbox" checked={o.periods.includes(p)} onChange={e=>setOverride(o.id,{periods:e.target.checked?[...o.periods,p]:o.periods.filter(v=>v!==p)})}/>{p}限</label>)}<button className="action" onClick={()=>setCal({...cal,overrides:cal.overrides.filter(v=>v.id!==o.id)})}>特別校時を削除</button></div></div>)}
+    <button className="action" onClick={()=>setCal({...cal,overrides:[...cal.overrides,{id:uid(),date:today(),grade:null,periods:['1','2','3','4'],minutes:40}]})}>短縮日を追加</button>
+    <p><label><input type="checkbox" checked={cal.confirmed} onChange={e=>setCal({...cal,confirmed:e.target.checked})}/>授業数・校時・休業・祝日行事を確認済み</label></p>
+    <h3>{classLabel(c)} の年度末予測</h3><Field label="予測用の通常時間割"><select value={c.forecastTemplateId||''} onChange={e=>onTemplate(c.id,e.target.value||null)}><option value="">未指定（登録済みの未来授業のみ）</option>{state.templates.filter(t=>t.grade===c.grade).map(t=><option key={t.id} value={t.id}>{t.name}</option>)}</select></Field>
+    <p className="muted">実施済み＋基準日翌日から年度末までの登録授業（未登録コマは指定時間割を反復）。休業・行事・短縮分数を反映します。空きコマはテンプレートで埋まる想定です。専科の同時刻重複は予測から除外します。</p>
+    {!forecast.confirmed&&<p className="error-text">学校暦が未確認のため、不足予測を確定表示していません。</p>}
+    {(!forecast.template||state.meta.role==='specialist'&&state.classes.filter(v=>v.schoolYear===state.meta.schoolYear).some(v=>!v.forecastTemplateId))&&<p className="error-text">通常時間割が未指定の学級があります。予測は登録済み授業だけの部分見積もりです。</p>}
+    <p className="muted">基準日 {today()} ／ 重複除外 {forecast.conflicts}コマ ／ 学校暦と競合する登録授業 {forecast.blocked}コマ</p>
+    <div className="table-scroll"><table className="data-table"><thead><tr><th>教科</th><th>標準</th><th>実施済み</th><th>残りの見込</th><th>年度末見込</th><th>不足見込</th></tr></thead><tbody>{forecast.rows.map(r=><tr key={r.subject.id}><td>{r.subject.name}</td><td>{r.standard??'—'}</td><td>{formatHours(r.actual)}</td><td>{formatHours(r.future)}</td><td>{forecast.confirmed?formatHours(r.forecast):'未確認'}</td><td className={r.shortage>0?'error-text':''}>{forecast.confirmed&&r.shortage!=null?formatHours(r.shortage):'—'}</td></tr>)}</tbody></table></div>
+  </section>;
+}
+function RoomsView({state,weekStart,onSave,onClassRoom}){
+  const[rooms,setRooms]=useState(()=>clone(state.rooms)),[routes,setRoutes]=useState(()=>clone(state.travelRules)),[error,setError]=useState('');
+  useEffect(()=>{setRooms(clone(state.rooms));setRoutes(clone(state.travelRules))},[state.rooms,state.travelRules]);
+  const warnings=roomAndTravelWarnings(state,weekStart),roomName=id=>state.rooms.find(r=>r.id===id)?.name||'未設定';
+  return <section className="page-view"><div className="page-toolbar"><h2>教室・移動</h2><button className="action" onClick={()=>{try{const valid=normalizePlan({...state,rooms,travelRules:routes});onSave(valid.rooms,valid.travelRules);setError('')}catch(e){setError(e.message)}}}>教室設定を保存</button></div>
+    {error&&<p className="error-text" role="alert">{error}</p>}
+    {rooms.map(r=><div className="fields rule-row" key={r.id}><Field label="教室名"><input value={r.name} onChange={e=>setRooms(rooms.map(v=>v.id===r.id?{...v,name:e.target.value}:v))}/></Field><Field label="棟"><input value={r.building} onChange={e=>setRooms(rooms.map(v=>v.id===r.id?{...v,building:e.target.value}:v))}/></Field><Field label="階"><input value={r.floor} onChange={e=>setRooms(rooms.map(v=>v.id===r.id?{...v,floor:e.target.value}:v))}/></Field><button className="action" onClick={()=>{try{const next=rooms.filter(v=>v.id!==r.id),rules=routes.filter(v=>v.fromId!==r.id&&v.toId!==r.id);normalizePlan({...state,rooms:next,travelRules:rules});setRooms(next);setRoutes(rules);setError('')}catch{setError('使用中の教室です。学級・授業・テンプレートの教室指定を解除してから削除してください。')}}}>教室を削除</button></div>)}
+    <button className="action" onClick={()=>setRooms([...rooms,{id:uid(),name:'新しい教室',building:'',floor:''}])}>教室を追加</button>
+    <h3>教室間の移動時間（往復共通）</h3>{routes.map((r,i)=><div className="fields rule-row" key={i}>{['fromId','toId'].map(k=><Field key={k} label={k==='fromId'?'教室A':'教室B'}><select value={r[k]} onChange={e=>setRoutes(routes.map((v,j)=>i===j?{...v,[k]:e.target.value}:v))}>{rooms.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}</select></Field>)}<Field label="必要な分数"><input type="number" min="0" max="180" value={r.minutes} onChange={e=>setRoutes(routes.map((v,j)=>i===j?{...v,minutes:Number(e.target.value)}:v))}/></Field><button className="action" onClick={()=>setRoutes(routes.filter((_,j)=>j!==i))}>経路を削除</button></div>)}
+    <button className="action" disabled={rooms.length<2} onClick={()=>setRoutes([...routes,{fromId:rooms[0].id,toId:rooms[1].id,minutes:5}])}>経路を追加</button>
+    <h3>学級の既定教室</h3><div className="fields">{state.classes.filter(c=>c.schoolYear===state.meta.schoolYear).map(c=><Field key={c.id} label={`${classLabel(c)}の教室`}><select value={c.defaultRoomId||''} onChange={e=>onClassRoom(c.id,e.target.value||null)}><option value="">未設定</option>{state.rooms.map(r=><option key={r.id} value={r.id}>{r.name}</option>)}</select></Field>)}</div>
+    <h3>{weekStart}週の確認</h3>{warnings.clashes.map((g,i)=><p className="error-text" key={i}>{g[0].date} {g[0].period}限 {roomName(g[0].roomId)}: {g.map(s=>s.classLabel).join(' / ')} の教室利用が重複</p>)}
+    <div className="table-scroll"><table className="data-table"><thead><tr><th>日付・限間</th><th>移動</th><th>休み時間</th><th>必要時間</th><th>確認</th></tr></thead><tbody>{warnings.moves.map((m,i)=><tr key={i}><td>{m.date} {m.period}→{+m.period+1}限</td><td>{roomName(m.fromId)} → {roomName(m.toId)}</td><td>{m.gap??'未確認'}</td><td>{m.required??'未設定'}</td><td className={m.warning==='移動可能'?'':'error-text'}>{m.warning}</td></tr>)}</tbody></table></div>
+    {!warnings.moves.length&&<p className="muted">連続する授業に教室間移動はありません。空き時間を挟む移動や他教員の予約は対象外です。</p>}
+  </section>;
+}
+function AnnualView({state,classId,onResource}){
+  const c=state.classes.find(c=>c.id===classId),[subjectId,setSubjectId]=useState(c.subjectIds[0]||'sansu');
+  const plan=state.curriculum.find(p=>p.schoolYear===c.schoolYear&&p.grade===c.grade&&p.subjectId===subjectId);
+  const comparisons=state.classes.filter(v=>v.schoolYear===c.schoolYear&&v.grade===c.grade&&(state.meta.role!=='specialist'||v.subjectIds.includes(subjectId))).map(v=>({c:v,progress:plan?calculateCurriculumProgress(plan,listLessons(state.classPlans[v.id]?.weeks||{},v.grade,v.schoolYear).filter(s=>s.subjectId===subjectId),today()):null}));
+  const months=[4,5,6,7,8,9,10,11,12,1,2,3];
+  return <section className="page-view"><div className="page-toolbar"><h2>年間比較</h2><span>{c.schoolYear}年度 {c.grade}年</span><Field label="年間比較の教科"><select value={subjectId} onChange={e=>setSubjectId(e.target.value)}>{state.subjects.filter(s=>state.meta.role!=='specialist'||c.subjectIds.includes(s.id)).map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></Field></div>
+    {!plan?<p className="muted">この学年・教科の年間指導計画は未登録です。「時数・指導計画」からExcelを取り込めます。</p>:<><p className="muted">{plan.publisher} {plan.textbook} ／ 予定月は出版社の配当目安です。未紐付け授業を単元名から推測して加算しません。</p>
+      <div className="table-scroll"><table className="data-table" style={{minWidth:980}}><thead><tr><th>単元・配当</th>{months.map(m=><th key={m}>{m}月</th>)}</tr></thead><tbody>{plan.units.map(u=><tr key={u.id}><td><button className="action" onClick={()=>onResource(plan.id,u.id)}>{u.title}</button><br/>{u.plannedHours}時 {u.month==null?'月未設定':''}</td>{months.map(m=><td key={m} style={{background:u.month===m?'#D5EDE7':'transparent'}}>{u.month===m?`${u.plannedHours}時`:''}</td>)}</tr>)}</tbody></table></div>
+      <h3>学級別の単元進捗（実施済み／配当）</h3><div className="table-scroll"><table className="data-table"><thead><tr><th>単元</th>{comparisons.map(v=><th key={v.c.id}>{classLabel(v.c)}</th>)}</tr></thead><tbody>{plan.units.map(u=><tr key={u.id}><td>{u.title}</td>{comparisons.map(v=>{const r=v.progress.rows.find(r=>r.id===u.id);return <td key={v.c.id}>{formatHours(r.actual)} / {u.plannedHours}<div className="progress-track"><div style={{width:`${Math.min(100,r.progress)}%`}}/></div>{r.progress.toFixed(1)}%</td>})}</tr>)}</tbody></table></div>
+      <p className="muted">{comparisons.map(v=>`${classLabel(v.c)} 未紐付け ${formatHours(v.progress.unlinked)}時`).join(' / ')}</p>
+    </>}
+  </section>;
+}
+function ReflectionsView({state,onReuse,onResource}){
+  const[year,setYear]=useState(state.meta.schoolYear),[query,setQuery]=useState(''),[subjectId,setSubjectId]=useState('');
+  const years=[...new Set(state.classes.map(c=>c.schoolYear))].sort((a,b)=>b-a);
+  const lessons=assignedLessons(state,year).filter(s=>s.status==='done'&&s.date<=today()&&(!subjectId||s.subjectId===subjectId)&&(s.unit+s.sub+s.reflection?.observations+s.reflection?.nextSteps).includes(query)).sort((a,b)=>b.date.localeCompare(a.date)||+a.period-+b.period);
+  const labels={none:'未記録',met:'達成',partial:'一部達成',retry:'再指導'};
+  return <section className="page-view"><div className="page-toolbar"><h2>振り返り・次年度の教材研究</h2><Field label="振り返りの年度"><select value={year} onChange={e=>setYear(Number(e.target.value))}>{years.map(y=><option key={y} value={y}>{y}年度</option>)}</select></Field><Field label="振り返りの教科"><select value={subjectId} onChange={e=>setSubjectId(e.target.value)}><option value="">全教科</option>{state.subjects.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></Field><Field label="単元・振り返り検索"><input type="search" value={query} onChange={e=>setQuery(e.target.value)}/></Field></div>
+    <div className="table-scroll"><table className="data-table"><thead><tr><th>授業</th><th>単元・達成</th><th>学びの様子</th><th>改善</th><th>教材研究へ</th></tr></thead><tbody>{lessons.map(s=>{const r=s.reflection||emptyReflection(),targets=state.curriculum.filter(p=>p.grade===s.grade&&p.subjectId===s.subjectId).flatMap(p=>p.units.map(u=>({planId:p.id,year:p.schoolYear,unit:u})));return <tr key={s.lessonId}><td>{s.date} {s.period}限<br/>{s.classLabel}</td><td>{s.unit} {s.sub}<br/>{labels[r.achievement]}</td><td style={{whiteSpace:'pre-wrap'}}>{r.observations}</td><td style={{whiteSpace:'pre-wrap'}}>{r.nextSteps}</td><td><ReflectionReuse targets={targets} source={s} onReuse={onReuse} onResource={onResource}/></td></tr>})}</tbody></table></div>
+    {!lessons.length&&<p className="muted">該当する実施済み授業はありません。</p>}
+  </section>;
+}
+function ReflectionReuse({targets,source,onReuse,onResource}){
+  const[target,setTarget]=useState('');
+  const selected=targets.find(t=>`${t.planId}|${t.unit.id}`===target);
+  return <><select aria-label={`${source.lessonId} の転記先単元`} value={target} onChange={e=>setTarget(e.target.value)}><option value="">転記先を選択</option>{targets.map(t=><option key={`${t.planId}|${t.unit.id}`} value={`${t.planId}|${t.unit.id}`}>{t.year}年度 {t.unit.title}</option>)}</select><div className="modal-actions"><button className="action" disabled={!selected||!source.reflection?.observations&&!source.reflection?.nextSteps} onClick={()=>onReuse(source,selected.planId,selected.unit.id)}>ノートへ転記</button><button className="action" disabled={!selected} onClick={()=>onResource(selected.planId,selected.unit.id)}>教材研究</button></div></>;
+}
+function ExcelExportModal({state,classId,weekStart,onProfile,onClose}){
+  const[kind,setKind]=useState('week'),[settings,setSettings]=useState(()=>defaultExportSettings('week')),[name,setName]=useState('学校様式'),[profileId,setProfileId]=useState('');
+  const[workbook,setWorkbook]=useState(null),[sheetName,setSheetName]=useState('週案'),[error,setError]=useState(''),[all,setAll]=useState(false),[startDate,setStart]=useState(`${state.meta.schoolYear}-04-01`),[endDate,setEnd]=useState(`${state.meta.schoolYear+1}-03-31`);
+  const preview=useMemo(()=>{try{if(!globalThis.XLSX)throw new Error('Excelライブラリを読み込めませんでした');const cells=workbookExportCells(state,{kind,classId,weekStart,settings,startDate,endDate,allClasses:all});fillWorkbook(workbook,sheetName,cells);return {cells,error:''}}catch(e){return {cells:[],error:e.message}}},[state,classId,weekStart,kind,settings,workbook,sheetName,startDate,endDate,all]);
+  const readFile=async e=>{const f=e.target.files[0];if(!f)return;try{if(f.size>10*1024*1024)throw new Error('10MB以内のxlsxを選択してください');const wb=XLSX.read(await f.arrayBuffer(),{type:'array',cellStyles:true});setWorkbook(wb);setSheetName(wb.SheetNames[0]);setError('')}catch(e){setError(e.message)}};
+  return <Modal title="Excel様式出力" onClose={onClose}>
+    <div className="fields"><Field label="出力内容"><select value={kind} onChange={e=>{setKind(e.target.value);setSettings(defaultExportSettings(e.target.value));setProfileId('');if(!workbook)setSheetName(e.target.value==='week'?'週案':'時数報告')}}><option value="week">現在の週案</option><option value="hours">時数報告</option></select></Field><Field label="保存した出力設定"><select value={profileId} onChange={e=>{setProfileId(e.target.value);const p=state.exportProfiles.find(v=>v.id===e.target.value);if(p){setSettings(clone(p.settings));setSheetName(p.sheetName);setName(p.name)}}}><option value="">新しい設定</option>{state.exportProfiles.filter(p=>p.kind===kind).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></Field></div>
+    <Field label="学校様式のxlsx（任意）"><input type="file" accept=".xlsx" onChange={readFile}/></Field>
+    <Field label="出力シート">{workbook?<select value={sheetName} onChange={e=>setSheetName(e.target.value)}>{workbook.SheetNames.map(s=><option key={s}>{s}</option>)}</select>:<input value={sheetName} onChange={e=>setSheetName(e.target.value)}/>}</Field>
+    <p className="muted">セル位置はA1形式。結合セルは左上を指定し、数式セルには出力しません。基本のセル・結合・列幅を引き継ぎますが、図形・マクロ・高度な印刷設定の完全保持は保証しません。原本とは別ファイルで出力します。</p>
+{kind==='week'?<><div className="fields">{[['headerStart','曜日・日付の開始セル'],['eventsStart','行事の開始セル'],['morningStart','業前の開始セル'],['lessonStart','1限の開始セル']].map(([k,label])=><Field key={k} label={label}><input value={settings[k]} onChange={e=>setSettings({...settings,[k]:e.target.value.toUpperCase()})}/></Field>)}{[['rowStep','授業の行間隔'],['colStep','曜日の列間隔']].map(([k,label])=><Field key={k} label={label}><input type="number" min="1" max="20" value={settings[k]} onChange={e=>setSettings({...settings,[k]:Number(e.target.value)})}/></Field>)}</div><div className="fields">{[['schoolYear','年度セル'],['classLabel','学級セル'],['teacherName','教員名セル'],['weekStart','週初日セル']].map(([k,label])=><Field key={k} label={label}><input value={settings.metaCells?.[k]||''} onChange={e=>setSettings({...settings,metaCells:{...settings.metaCells,[k]:e.target.value.toUpperCase()}})}/></Field>)}</div><label><input type="checkbox" checked={settings.includeMemo} onChange={e=>setSettings({...settings,includeMemo:e.target.checked})}/>児童メモも出力（個人情報に注意）</label></>:<><div className="fields"><Field label="報告表の開始セル"><input value={settings.headerStart} onChange={e=>setSettings({...settings,headerStart:e.target.value.toUpperCase()})}/></Field><Field label="集計開始日"><input type="date" value={startDate} onChange={e=>setStart(e.target.value)}/></Field><Field label="集計終了日"><input type="date" value={endDate} onChange={e=>setEnd(e.target.value)}/></Field></div><label><input type="checkbox" checked={settings.writeHeaders} onChange={e=>setSettings({...settings,writeHeaders:e.target.checked})}/>列見出しも出力</label> <label><input type="checkbox" checked={all} onChange={e=>setAll(e.target.checked)}/>全担当学級</label><div className="check-options">{CSV_HEADERS.map((label,i)=><label key={i}><input type="checkbox" checked={settings.columns.includes(i)} onChange={e=>setSettings({...settings,columns:e.target.checked?[...settings.columns,i].sort((a,b)=>a-b):settings.columns.filter(v=>v!==i)})}/>出力列: {label}</label>)}</div></>}
+    <Field label="出力設定の名前"><input value={name} onChange={e=>setName(e.target.value)}/></Field>
+    {(error||preview.error)&&<p className="error-text" role="alert">{error||preview.error}</p>}
+    <details><summary>出力プレビュー {preview.cells.length}セル</summary><div className="table-scroll" style={{maxHeight:240}}><table className="data-table"><tbody>{preview.cells.slice(0,40).map(c=><tr key={c.address}><td>{c.address}</td><td style={{whiteSpace:'pre-wrap'}}>{c.value}</td></tr>)}</tbody></table></div></details>
+    <div className="modal-actions"><button className="action" onClick={onClose}>閉じる</button><button className="action" disabled={!!preview.error||!name.trim()} onClick={()=>{onProfile({id:profileId||uid(),name:name.trim(),kind,sheetName,settings:clone(settings)});setError('出力設定を保存しました')}}>設定を保存</button><button className="action" disabled={!!preview.error} onClick={()=>{try{XLSX.writeFile(fillWorkbook(workbook,sheetName,preview.cells),`${kind==='week'?'週案':'時数報告'}-${weekStart}.xlsx`,{cellStyles:true});setError('')}catch(e){setError(e.message)}}}>Excelを書き出す</button></div>
+  </Modal>;
+}
+
+const CLOUD_PREF_KEY='weeklyPlannerCloud_v1';
+function loadCloudPreferences(){
+  const defaults={enabled:false,auto:false,includePrivate:false,revision:null,gasUrl:''};
+  try{const p=JSON.parse(localStorage.getItem(CLOUD_PREF_KEY));if(!isRecord(p))return defaults;return {...defaults,enabled:p.enabled===true,auto:p.auto===true,includePrivate:p.includePrivate===true,revision:Number.isInteger(p.revision)&&p.revision>=0?p.revision:null,gasUrl:typeof p.gasUrl==='string'?p.gasUrl:''}}catch{return defaults}
+}
+function useCloudSync(state,blocked,onRestore){
+  const[prefs,setPrefs]=useState(loadCloudPreferences),[busy,setBusy]=useState(false),[message,setMessage]=useState(''),[backups,setBackups]=useState([]);
+  const latest=useRef({state,blocked,onRestore,prefs}),busyRef=useRef(false),savedHash=useRef('');latest.current={state,blocked,onRestore,prefs};
+  const available=!!globalThis.google?.script?.run;
+  useEffect(()=>{try{localStorage.setItem(CLOUD_PREF_KEY,JSON.stringify(prefs))}catch(e){setMessage(`同期設定を端末に保存できません: ${e.message}`)}},[prefs]);
+  const run=async fn=>{if(busyRef.current)return;busyRef.current=true;setBusy(true);try{await fn()}catch(e){setMessage(`同期を停止しました: ${e.message||e}`);setPrefs(p=>({...p,auto:false}))}finally{busyRef.current=false;setBusy(false)}};
+  const upload=async(manual=true)=>{
+    const {state:plan,prefs:settings,blocked:badStorage}=latest.current;
+    if(!available||!settings.enabled||badStorage)throw new Error('GAS同期の有効化と端末保存の状態を確認してください');
+    let revision=settings.revision;
+    if(revision==null){if(!manual)throw new Error('最初の保存は手動で実行してください');const status=await callGas('getCloudStatus');if(status.exists&&!confirm(`Driveの保存 revision ${status.revision} を、この端末の内容で置き換えますか？別端末の未反映変更は先に確認してください。`))return;revision=status.revision}
+    const payload=cloudPlanPayload(plan,settings.includePrivate),planText=JSON.stringify(payload);
+    const result=await callGas('saveCloudPlan',{baseRevision:revision,includePrivate:settings.includePrivate,planText});
+    savedHash.current=planText;setPrefs(p=>({...p,revision:result.revision}));setMessage(`Drive保存完了 revision ${result.revision} ／ ${result.updatedAt}`);
+  };
+  useEffect(()=>{
+    if(!available||!prefs.enabled||!prefs.auto||prefs.revision==null||blocked||busy)return;
+    const text=JSON.stringify(cloudPlanPayload(state,prefs.includePrivate));if(text===savedHash.current)return;
+    const timer=setTimeout(()=>run(()=>upload(false)),3000);return()=>clearTimeout(timer);
+  },[state,prefs,available,blocked,busy]);
+  const receive=async backupId=>{
+    if(!available||!latest.current.prefs.enabled)throw new Error('同期を有効にしてください');
+    const result=await callGas(backupId?'loadCloudBackup':'loadCloudPlan',backupId?{backupId}:undefined);
+    if(!result.exists)throw new Error('Driveに保存データがありません');
+    const current=latest.current;
+    const remote=normalizePlan(result.plan),include=current.prefs.includePrivate&&result.includePrivate;
+    const restored=normalizePlan(mergeCloudPrivate(remote,current.state,include));
+    if(!confirm('端末内の週案をDriveの内容で置き換えますか？送信対象外のメモは授業IDが一致するものだけ維持し、現在の全データを復元前の原本として端末に残します。'))return;
+    // クラウドの削除や置き換えに巻き込まれた非同期メモも、原本から回収できる。
+    localStorage.setItem('weeklyPlan_beforeCloud_v4',JSON.stringify(current.state));
+    savedHash.current=JSON.stringify(cloudPlanPayload(restored,current.prefs.includePrivate));
+    setPrefs(p=>({...p,revision:result.headRevision??result.revision,auto:false}));current.onRestore(restored);setMessage('Driveから復元しました。自動保存は停止しています。内容を確認してから再開してください。');
+  };
+  return {prefs,setPrefs,busy,message,backups,available,save:()=>run(()=>upload(true)),load:()=>run(()=>receive()),list:()=>run(async()=>{if(!latest.current.prefs.enabled)throw new Error('同期を有効にしてください');setBackups(await callGas('listCloudBackups'));setMessage('保存履歴を取得しました')}),restoreBackup:id=>run(()=>receive(id))};
+}
+function CloudView({cloud,state}){
+  const{prefs,setPrefs,busy,message,backups,available}=cloud;
+  const gasUrl=/^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/.test(prefs.gasUrl)?prefs.gasUrl:null;
+  return <section className="page-view"><div className="page-toolbar"><h2>同期・バックアップ</h2><button className="action" onClick={()=>downloadText(`weekly-plan-${state.meta.schoolYear}.json`,JSON.stringify(state,null,2))}>端末のJSONバックアップ</button></div>
+    <p className="muted">既定は端末内保存です。Drive保存は認可済みGAS版から、ログイン本人の非公開ファイルにだけ行います。公開URLの通常版からDriveへの自動送信はありません。</p>
+    {!available&&<><p className="error-text">現在は通常のWeb版です。Drive同期にはGAS版のデプロイ・Google認可が必要です。</p><Field label="自分のGAS WebアプリURL"><input type="url" value={prefs.gasUrl} onChange={e=>setPrefs({...prefs,gasUrl:e.target.value.trim()})}/></Field>{gasUrl&&<a href={gasUrl} target="_blank" rel="noopener noreferrer">GAS版を開く</a>}<p className="muted">URLごとに端末保存領域が異なります。GAS版の初回起動時に、JSONを設定画面から復元してください。</p></>}
+    <div className="check-options"><label><input type="checkbox" disabled={!available||busy} checked={prefs.enabled} onChange={e=>{if(e.target.checked&&!confirm('授業計画・学級情報・行事・教材リンクを、自分のGoogle Driveへ保存します。既定では児童メモ・振り返り・教材研究ノート・タスクは送信しません。有効にしますか？'))return;setPrefs({...prefs,enabled:e.target.checked,auto:false})}}/>本人のDrive保存を有効にする</label></div>
+    <div className="check-options"><label><input type="checkbox" disabled={!available||!prefs.enabled||busy} checked={prefs.includePrivate} onChange={e=>{if(e.target.checked&&!confirm('児童メモ・振り返り・教材研究ノート・タスクもDriveに送信します。校内の個人情報取扱規程を確認しましたか？'))return;setPrefs({...prefs,includePrivate:e.target.checked,auto:false})}}/>個人情報を含む欄も保存</label><label><input type="checkbox" disabled={!available||!prefs.enabled||prefs.revision==null||busy} checked={prefs.auto} onChange={e=>setPrefs({...prefs,auto:e.target.checked})}/>変更後に自動保存・世代バックアップ</label></div>
+    <p className="muted">自動保存はGAS版を開いている間だけ動きます。競合時は上書きせず停止します。保存前の世代を10件保持します。送信項目を減らしても過去のバックアップは自動削除しません。メモは単元・持ち物など送信対象の欄に書かないでください。</p>
+    <div className="page-toolbar"><button className="action" disabled={!available||!prefs.enabled||busy} onClick={cloud.save}>Driveへ保存</button><button className="action" disabled={!available||!prefs.enabled||busy} onClick={cloud.load}>Driveから復元</button><button className="action" disabled={!available||!prefs.enabled||busy} onClick={cloud.list}>世代一覧を取得</button><button className="action" onClick={()=>{const text=localStorage.getItem('weeklyPlan_beforeCloud_v4');if(text)downloadText('weekly-plan-before-cloud.json',text);else alert('復元前の原本はありません')}}>Drive復元前の原本を書き出す</button></div>
+    <p role="status">{busy?'処理中…':message} {prefs.revision!=null&&`／ 確認済みrevision ${prefs.revision}`}</p>
+    {backups.map(b=><div className="prep-row" key={b.id}><span style={{flex:1}}>{b.updatedAt} revision {b.revision} {b.includePrivate?'個人情報欄を含む':'個人情報欄を除外'}</span><button className="action" disabled={busy} onClick={()=>cloud.restoreBackup(b.id)}>この世代を復元</button></div>)}
+  </section>;
+}
 function App(){
   const[loaded]=useState(loadPlan);
   const[profile,setProfile]=useState(loaded.plan.meta);
@@ -991,6 +1434,8 @@ function App(){
   const visibleSubjects=subjects.filter(s=>!subjectIds||subjectIds.includes(s.id));
   const[tasks,setTasks]=useState(()=>loadTasks(loaded.plan));
   const[curriculum,setCurriculum]=useState(loaded.plan.curriculum);
+  const[templates,setTemplates]=useState(loaded.plan.templates),[schoolCalendar,setSchoolCalendar]=useState(loaded.plan.schoolCalendar);
+  const[rooms,setRooms]=useState(loaded.plan.rooms),[travelRules,setTravelRules]=useState(loaded.plan.travelRules),[exportProfiles,setExportProfiles]=useState(loaded.plan.exportProfiles);
   const[storageError,setStorageError]=useState(loaded.error);
   const[storageBlocked,setStorageBlocked]=useState(loaded.blocked);
   const[view,setView]=useState('week');
@@ -1006,9 +1451,13 @@ function App(){
   const[classEditor,setClassEditor]=useState(null);
   const[rescheduleOrigin,setRescheduleOrigin]=useState(null);
   const[showReport,setShowReport]=useState(false);
+  const[weekAction,setWeekAction]=useState('');
+  const[history,setHistory]=useState(()=>({past:[],present:loaded.plan,future:[],tag:'',time:0}));
+  const historyRef=useRef(history),historyTag=useRef('');
 
-  const state=useMemo(()=>({version:3,meta:profile,activeClassId:classId||activeClassId,classes,classPlans,subjects,events,tasks:saveTasks(tasks),curriculum,preparations}),[profile,classId,activeClassId,classes,classPlans,subjects,events,tasks,curriculum,preparations]);
+  const state=useMemo(()=>({version:4,meta:profile,activeClassId:classId||activeClassId,classes,classPlans,subjects,events,tasks:saveTasks(tasks),curriculum,preparations,templates,schoolCalendar,rooms,travelRules,exportProfiles}),[profile,classId,activeClassId,classes,classPlans,subjects,events,tasks,curriculum,preparations,templates,schoolCalendar,rooms,travelRules,exportProfiles]);
   const stateRef=useRef(state);stateRef.current=state;
+  useEffect(()=>{const old=historyRef.current,next=recordHistory(old,state,historyTag.current);historyTag.current='';historyRef.current=next;if(next.past!==old.past||next.future!==old.future)setHistory(next)},[state]);
   const blockedRef=useRef(storageBlocked);blockedRef.current=storageBlocked;
   useEffect(()=>{
     if(storageBlocked)return;
@@ -1025,7 +1474,16 @@ function App(){
     if(!WEEKDAYS.some((_,i)=>inSchoolYear(toKey(addDays(parseKey(weekStart),i)),meta.schoolYear)))setWeekStart(toKey(getMonday(parseKey(`${meta.schoolYear}-04-01`))));
   },[meta.schoolYear]);
   useEffect(()=>{setDragSubject(null);if(profile.role!=='specialist'&&view==='teacher')setView('week')},[profile.role]);
-  const restore=plan=>{setProfile(plan.meta);setClasses(plan.classes);setClassPlans(plan.classPlans);setActiveClassId(plan.activeClassId);setPreparations(plan.preparations);setSubjects(plan.subjects);setEvents(plan.events);setTasks(plan.tasks);setCurriculum(plan.curriculum);setStorageBlocked(false);setStorageError('');setNotice('バックアップを復元しました')};
+  const applyPlan=plan=>{setProfile(plan.meta);setClasses(plan.classes);setClassPlans(plan.classPlans);setActiveClassId(plan.activeClassId);setPreparations(plan.preparations);setSubjects(plan.subjects);setEvents(plan.events);setTasks(plan.tasks);setCurriculum(plan.curriculum);setTemplates(plan.templates);setSchoolCalendar(plan.schoolCalendar);setRooms(plan.rooms);setTravelRules(plan.travelRules);setExportProfiles(plan.exportProfiles);setEditCell(null);setResource(null);setDragSubject(null)};
+  const restore=plan=>{applyPlan(plan);setStorageBlocked(false);setStorageError('');setNotice('バックアップを復元しました')};
+  const cloud=useCloudSync(state,storageBlocked||!!storageError,restore);
+  const undoRedo=direction=>{
+    const current=recordHistory(historyRef.current,stateRef.current),next=travelHistory(current,direction);if(next===current)return;
+    const snapshot={...next.present,meta:{...next.present.meta,schoolYear:stateRef.current.meta.schoolYear},activeClassId:stateRef.current.activeClassId};
+    if(!snapshot.classes.some(c=>c.id===snapshot.activeClassId))snapshot.activeClassId=snapshot.classes.find(c=>c.schoolYear===snapshot.meta.schoolYear)?.id||snapshot.classes[0].id;
+    historyRef.current={...next,present:snapshot};setHistory(historyRef.current);applyPlan(snapshot);
+  };
+  useEffect(()=>{const handler=e=>{if(e.defaultPrevented||e.target.closest('input,textarea,select,[contenteditable="true"],[role="dialog"]')||!(e.ctrlKey||e.metaKey)||e.altKey)return;if(e.key.toLowerCase()==='z'){e.preventDefault();undoRedo(e.shiftKey?'redo':'undo')}else if(e.key.toLowerCase()==='y'){e.preventDefault();undoRedo('redo')}};window.addEventListener('keydown',handler);return()=>window.removeEventListener('keydown',handler)},[]);
   const openClassEditor=c=>{setShowSettings(false);setClassEditor({data:c||null})};
   const saveClass=c=>{
     if(classes.some(v=>v.id!==c.id&&v.schoolYear===c.schoolYear&&v.grade===c.grade&&v.className===c.className))throw new Error('同じ学年・組は登録済みです');
@@ -1055,6 +1513,7 @@ function App(){
   };
   const updateGyozen=(dayKey,text)=>{
     if(!selectedClass||!inSchoolYear(dayKey,meta.schoolYear))return;
+    historyTag.current=`gyozen:${classId}:${dayKey}`;
     setWeeks(prev=>{
       const next=JSON.parse(JSON.stringify(prev));
       if(!next[weekStart])next[weekStart]={weekStart,grade:meta.grade,days:{}};
@@ -1102,7 +1561,7 @@ function App(){
   const importCurriculum=plan=>{
     setCurriculum(prev=>{
       const existing=prev.find(c=>c.id===plan.id);
-      const next={...plan,units:plan.units.map(u=>({...u,resources:existing?.units.find(old=>old.id===u.id)?.resources||[]}))};
+      const next={...plan,units:plan.units.map(u=>({...u,resources:existing?.units.find(old=>old.id===u.id)?.resources||[],researchNote:existing?.units.find(old=>old.id===u.id)?.researchNote||''}))};
       return [...prev.filter(c=>c.id!==plan.id),next];
     });setShowExcel(false);
   };
@@ -1110,6 +1569,8 @@ function App(){
   const deleteEvent=(date,id)=>{if(confirm('この行事を端末内のカレンダーから削除しますか？'))setEvents(prev=>({...prev,[date]:(prev[date]||[]).filter(e=>e.id!==id)}))};
   const resourceUnit=resource?curriculum.find(c=>c.id===resource.planId)?.units.find(u=>u.id===resource.unitId):null;
   const weekGrade=weeks[weekStart]?.grade||meta.grade;
+  const updateResearch=(planId,unitId,note)=>setCurriculum(prev=>prev.map(c=>c.id===planId?{...c,units:c.units.map(u=>u.id===unitId?{...u,researchNote:note}:u)}:c));
+  const updateClassField=(id,field,value)=>setClasses(prev=>prev.map(c=>c.id===id?{...c,[field]:value}:c));
 
   const mon=parseKey(weekStart);
   const monthLabel=`${mon.getFullYear()}年 ${mon.getMonth()+1}月`;
@@ -1126,9 +1587,9 @@ function App(){
           </div>
         </div>
         <div className="class-selector"><label htmlFor="active-class">学級</label><select id="active-class" value={classId} onChange={e=>{setActiveClassId(e.target.value);setDragSubject(null);setEditCell(null)}}>{!selectedClass&&<option value="">未登録</option>}{classes.filter(c=>c.schoolYear===meta.schoolYear).map(c=><option key={c.id} value={c.id}>{classLabel(c)}</option>)}</select><button className="action" title="学級を追加" aria-label="学級を追加" onClick={()=>openClassEditor(null)}>+</button></div>
-        <nav className="view-tabs" role="tablist" aria-label="画面">{[['week','週案'],...(profile.role==='specialist'?[['teacher','担当時間割']]:[]),['preparation','準備・振替'],['calendar','行事カレンダー'],['progress','時数・指導計画']].map(([id,label])=><button key={id} role="tab" aria-selected={view===id} onClick={()=>setView(id)}>{label}</button>)}</nav>
+        <nav className="view-tabs" role="tablist" aria-label="画面">{[['week','週案'],...(profile.role==='specialist'?[['teacher','担当時間割']]:[]),['preparation','準備・振替'],['calendar','行事カレンダー'],['progress','時数・指導計画'],['school','学校暦・予測'],['rooms','教室・移動'],['annual','年間比較'],['reflections','振り返り'],['cloud','同期・バックアップ']].map(([id,label])=><button key={id} role="tab" aria-selected={view===id} onClick={()=>setView(id)}>{label}</button>)}</nav>
         <div className="week-controls" style={{display:'flex',alignItems:'center',gap:6}}>
-          {['week','teacher','preparation'].includes(view)&&<><button title="前の週" aria-label="前の週" onClick={()=>moveWeek(-1)} style={{padding:'6px 10px',borderRadius:9,background:'#F3F4F6',color:'#6B7280',fontSize:13,fontWeight:'800'}}>◀</button>
+          {['week','teacher','preparation','rooms'].includes(view)&&<><button title="前の週" aria-label="前の週" onClick={()=>moveWeek(-1)} style={{padding:'6px 10px',borderRadius:9,background:'#F3F4F6',color:'#6B7280',fontSize:13,fontWeight:'800'}}>◀</button>
           <div style={{textAlign:'center',minWidth:120}}>
             <div style={{fontSize:13,fontWeight:'900',color:'#374151'}}>{monthLabel}</div>
             <div style={{fontSize:10,color:'#9CA3AF'}}>{fmtMD(mon)}週</div>
@@ -1136,6 +1597,8 @@ function App(){
           <button title="次の週" aria-label="次の週" onClick={()=>moveWeek(1)} style={{padding:'6px 10px',borderRadius:9,background:'#F3F4F6',color:'#6B7280',fontSize:13,fontWeight:'800'}}>▶</button>
           {view==='week'&&<><button onClick={copyPrevWeek} style={{padding:'6px 12px',borderRadius:9,background:'#EFF6FF',color:'#2563EB',fontSize:12,fontWeight:'800',marginLeft:4}}>前週コピー</button>
           <button onClick={()=>window.print()} style={{padding:'6px 12px',borderRadius:9,background:'#ECFDF5',color:'#059669',fontSize:12,fontWeight:'800'}}>🖨 印刷</button></>}</>}
+          {view==='week'&&selectedClass&&<select aria-label="週操作" value="" onChange={e=>setWeekAction(e.target.value)} style={{maxWidth:125,padding:5}}><option value="">週操作</option><option value="templates">テンプレート</option><option value="bulk">一括実施確認</option><option value="export">Excel様式出力</option></select>}
+          <button className="action" title="元に戻す" aria-label="元に戻す" disabled={!history.past.length} onClick={()=>undoRedo('undo')}>↶</button><button className="action" title="やり直す" aria-label="やり直す" disabled={!history.future.length} onClick={()=>undoRedo('redo')}>↷</button>
           <button title="設定・バックアップ" aria-label="設定・バックアップ" onClick={()=>setShowSettings(true)} style={{padding:'6px 10px',borderRadius:9,background:'#F3F4F6',color:'#6B7280',fontSize:13,fontWeight:'800'}}>⚙</button>
         </div>
       </div>
@@ -1266,11 +1729,11 @@ function App(){
             ))}
           </div>
         </div>
-        </>:view==='teacher'?<TeacherTimetable state={state} weekStart={weekStart} onEdit={s=>{setActiveClassId(s.classId);setView('week');setEditCell({classId:s.classId,dayKey:s.date,period:s.period,dayIdx:parseKey(s.date).getDay()-1,data:getLesson(classPlans,s)})}}/>:view==='preparation'?<PreparationView key={classId} state={state} weekStart={weekStart} classId={classId} onCheck={(key,done)=>setPreparations(prev=>({...prev,[weekStart]:{...prev[weekStart],[key]:done}}))} onReschedule={setRescheduleOrigin}/>:view==='calendar'?<CalendarView key={meta.schoolYear} meta={meta} events={events} onImport={()=>setShowExcel('events')} onEdit={setEventDate}/>:<ProgressView key={`${classId}-${profile.role}-${visibleSubjects.map(s=>s.id).join(',')}`} meta={meta} subjects={visibleSubjects} subjectIds={subjectIds} weeks={weeks} curriculum={curriculum} onImport={()=>setShowExcel('curriculum')} onReport={()=>setShowReport(true)} onResource={(planId,unitId)=>setResource({planId,unitId})}/>}
+        </>:view==='teacher'?<TeacherTimetable state={state} weekStart={weekStart} onEdit={s=>{setActiveClassId(s.classId);setView('week');setEditCell({classId:s.classId,dayKey:s.date,period:s.period,dayIdx:parseKey(s.date).getDay()-1,data:getLesson(classPlans,s)})}}/>:view==='preparation'?<PreparationView key={classId} state={state} weekStart={weekStart} classId={classId} onCheck={(key,done)=>setPreparations(prev=>({...prev,[weekStart]:{...prev[weekStart],[key]:done}}))} onReschedule={setRescheduleOrigin}/>:view==='calendar'?<CalendarView key={meta.schoolYear} meta={meta} events={events} onImport={()=>setShowExcel('events')} onEdit={setEventDate}/>:view==='school'?<SchoolCalendarView state={state} classId={classId} onSave={v=>{setSchoolCalendar(v);setNotice('学校暦を保存しました')}} onTemplate={(id,value)=>updateClassField(id,'forecastTemplateId',value)}/>:view==='rooms'?<RoomsView state={state} weekStart={weekStart} onSave={(r,t)=>{setRooms(r);setTravelRules(t);setNotice('教室設定を保存しました')}} onClassRoom={(id,value)=>updateClassField(id,'defaultRoomId',value)}/>:view==='annual'?<AnnualView key={`${classId}-${profile.role}`} state={state} classId={classId} onResource={(planId,unitId)=>setResource({planId,unitId})}/>:view==='reflections'?<ReflectionsView state={state} onResource={(planId,unitId)=>setResource({planId,unitId})} onReuse={(s,planId,unitId)=>{const u=curriculum.find(c=>c.id===planId)?.units.find(u=>u.id===unitId);if(u){updateResearch(planId,unitId,[u.researchNote,`${s.date} ${s.classLabel} ${s.unit}\n${s.reflection.observations}\n改善: ${s.reflection.nextSteps}`].filter(Boolean).join('\n\n'));setNotice('教材研究ノートへ振り返りを転記しました')}}}/>:view==='cloud'?<CloudView cloud={cloud} state={state}/>:<ProgressView key={`${classId}-${profile.role}-${visibleSubjects.map(s=>s.id).join(',')}`} meta={meta} subjects={visibleSubjects} subjectIds={subjectIds} weeks={weeks} curriculum={curriculum} onImport={()=>setShowExcel('curriculum')} onReport={()=>setShowReport(true)} onResource={(planId,unitId)=>setResource({planId,unitId})}/>}
       </div>
 
       {editCell&&(
-        <CellEditor cell={editCell} subjects={subjects.filter(s=>!subjectIds||subjectIds.includes(s.id)||s.id===editCell.data?.subjectId)} grade={weekGrade} curriculum={curriculum} schoolYear={schoolYearOf(editCell.dayKey)}
+        <CellEditor cell={editCell} subjects={subjects.filter(s=>!subjectIds||subjectIds.includes(s.id)||s.id===editCell.data?.subjectId)} grade={weekGrade} curriculum={curriculum} schoolYear={schoolYearOf(editCell.dayKey)} rooms={rooms} defaultRoomId={classes.find(c=>c.id===editCell.classId)?.defaultRoomId}
           onSave={(data)=>{updateCell(editCell.dayKey,editCell.period,data);setEditCell(null)}}
           onDelete={()=>{updateCell(editCell.dayKey,editCell.period,null);setEditCell(null)}}
           onReschedule={data=>{const ref={classId:editCell.classId,date:editCell.dayKey,period:editCell.period};const next=updateCell(ref.date,ref.period,data);setRescheduleOrigin({...ref,lessonId:getLesson(next,ref).lessonId});setEditCell(null)}}
@@ -1278,11 +1741,14 @@ function App(){
       )}
       {showExcel&&<ExcelImportModal kind={showExcel} meta={meta} subjects={subjects} onClose={()=>setShowExcel(false)} onImport={showExcel==='curriculum'?importCurriculum:handleImport}/>}
       {showSettings&&<SettingsModal meta={profile} setMeta={setProfile} state={state} onRestore={restore} onEditClass={openClassEditor} onAddClass={()=>openClassEditor(null)} onClose={()=>setShowSettings(false)}/>}
-      {classEditor&&<ClassEditor classData={classEditor.data} schoolYear={meta.schoolYear} subjects={subjects} defaultSubjectIds={profile.role==='specialist'?(selectedClass?.subjectIds||['ongaku']):subjects.map(s=>s.id)} onSave={saveClass} onClose={()=>setClassEditor(null)}/>}
+      {classEditor&&<ClassEditor classData={classEditor.data} schoolYear={meta.schoolYear} subjects={subjects} rooms={rooms} templates={templates} defaultSubjectIds={profile.role==='specialist'?(selectedClass?.subjectIds||['ongaku']):subjects.map(s=>s.id)} onSave={saveClass} onClose={()=>setClassEditor(null)}/>}
       {rescheduleOrigin&&<RescheduleModal state={state} origin={rescheduleOrigin} onClose={()=>setRescheduleOrigin(null)} onSave={target=>{setClassPlans(rescheduleLesson(stateRef.current,rescheduleOrigin,target));setRescheduleOrigin(null);setNotice(`${target.date} ${target.period}限に振替を登録しました。実施済みにはしていません。`)}}/>}
       {showReport&&<ReportModal state={state} classId={classId} onClose={()=>setShowReport(false)}/>}
       {eventDate&&<EventEditor date={eventDate} events={events} onAdd={addEvent} onDelete={deleteEvent} onClose={()=>setEventDate(null)}/>}
-      {resourceUnit&&<ResourceEditor unit={resourceUnit} onClose={()=>setResource(null)} onSave={resources=>setCurriculum(prev=>prev.map(c=>c.id===resource.planId?{...c,units:c.units.map(u=>u.id===resource.unitId?{...u,resources}:u)}:c))}/>}
+      {resourceUnit&&<ResourceEditor key={`${resource.planId}-${resource.unitId}`} unit={resourceUnit} onClose={()=>setResource(null)} onNoteSave={note=>{updateResearch(resource.planId,resource.unitId,note);setNotice('教材研究ノートを保存しました')}} onSave={resources=>setCurriculum(prev=>prev.map(c=>c.id===resource.planId?{...c,units:c.units.map(u=>u.id===resource.unitId?{...u,resources}:u)}:c))}/>}
+      {weekAction==='templates'&&<TemplateModal state={state} classId={classId} weekStart={weekStart} onClose={()=>setWeekAction('')} onSave={t=>setTemplates(prev=>[...prev,t])} onApply={(id,mode)=>{setClassPlans(applyWeekTemplate(stateRef.current,classId,weekStart,id,mode));setNotice('テンプレートを適用しました')}} onDelete={id=>{setTemplates(prev=>prev.filter(t=>t.id!==id));setClasses(prev=>prev.map(c=>c.forecastTemplateId===id?{...c,forecastTemplateId:null}:c))}}/>}
+      {weekAction==='bulk'&&<BulkDoneModal state={state} classId={classId} weekStart={weekStart} onClose={()=>setWeekAction('')} onSave={refs=>{setClassPlans(markLessonsDone(stateRef.current,refs));setNotice(`${refs.length}コマを実施済みにしました`)}}/>}
+      {weekAction==='export'&&<ExcelExportModal state={state} classId={classId} weekStart={weekStart} onClose={()=>setWeekAction('')} onProfile={p=>setExportProfiles(prev=>[...prev.filter(v=>v.id!==p.id),p])}/>}
     </div>
   );
 }

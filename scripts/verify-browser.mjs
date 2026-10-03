@@ -57,7 +57,7 @@ try {
   await dialog.getByPlaceholder('例：ものさし・ノート').fill('ものさし・ノート');
   await dialog.getByLabel('実施状態').selectOption('done');
   await dialog.getByRole('button', { name: '保存', exact: true }).click();
-  await page.waitForFunction(() => { const p = JSON.parse(localStorage.getItem('weeklyPlan_v3') || '{}'); return p.classPlans?.[p.activeClassId]?.weeks?.['2026-09-28']?.days?.['2026-09-28']?.periods?.['1']?.status === 'done'; });
+  await page.waitForFunction(() => { const p = JSON.parse(localStorage.getItem('weeklyPlan_v4') || '{}'); return p.classPlans?.[p.activeClassId]?.weeks?.['2026-09-28']?.days?.['2026-09-28']?.periods?.['1']?.status === 'done'; });
   await page.getByRole('button', { name: '次の週', exact: true }).click();
   await page.getByRole('button', { name: '前週コピー', exact: true }).click();
   assert.ok(!(await page.locator('.cell-drop').first().innerText()).includes('実施済'));
@@ -82,7 +82,7 @@ try {
     await dialog.getByRole('button', { name: '取り込みを確定' }).click();
   }
   assert.equal(await page.getByRole('button', { name: '避難訓練', exact: true }).count(), 1);
-  await page.waitForFunction(() => JSON.parse(localStorage.getItem('weeklyPlan_v3') || '{}').events?.['2027-01-08']?.length === 1);
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('weeklyPlan_v4') || '{}').events?.['2027-01-08']?.length === 1);
   const eventDownload = page.waitForEvent('download');
   await page.getByRole('button', { name: 'ICS書き出し' }).click();
   assert.ok((await eventDownload).suggestedFilename().endsWith('.ics'));
@@ -136,7 +136,7 @@ try {
   await page.screenshot({ path: fileURLToPath(new URL('weekly-mobile.png', out)), fullPage: true });
   const bounds = await page.locator('.schedule-grid').boundingBox();
   assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 391 && bounds.y + bounds.height <= 845);
-  await page.waitForFunction(() => !!JSON.parse(localStorage.getItem('weeklyPlan_v3') || '{}').curriculum?.[0]?.units?.[0]?.resources?.length);
+  await page.waitForFunction(() => !!JSON.parse(localStorage.getItem('weeklyPlan_v4') || '{}').curriculum?.[0]?.units?.[0]?.resources?.length);
   await page.reload({ waitUntil: 'networkidle' });
   assert.ok((await page.locator('.cell-drop').first().innerText()).includes('小数のしくみ'));
   await page.close();
@@ -220,10 +220,10 @@ try {
   await specialist.getByRole('button', { name: '前の週', exact: true }).click();
   await specialist.getByRole('button', { name: '振替候補', exact: true }).click();
   dialog = specialist.getByRole('dialog');
-  assert.equal(await dialog.getByRole('button', { name: '2026-10-05（月）1限', exact: true }).count(), 0);
-  assert.equal(await dialog.getByRole('button', { name: '2026-10-05（月）2限', exact: true }).count(), 0);
+  assert.equal(await dialog.getByRole('button', { name: /^2026-10-05（月）1限 \/ / }).count(), 0);
+  assert.equal(await dialog.getByRole('button', { name: /^2026-10-05（月）2限 \/ / }).count(), 0);
   assert.equal(await dialog.getByRole('button', { name: /2026-10-06/ }).count(), 0);
-  await dialog.getByRole('button', { name: '2026-10-05（月）3限', exact: true }).click();
+  await dialog.getByRole('button', { name: '2026-10-05（月）3限 / 45分', exact: true }).click();
   await dialog.getByRole('button', { name: 'このコマに振り替える', exact: true }).click();
   assert.ok((await specialist.locator('.page-view').innerText()).includes('振替: 2026-10-05 3限'));
   await specialist.getByRole('button', { name: '次の週', exact: true }).click();
@@ -243,7 +243,7 @@ try {
   await specialist.setViewportSize({ width: 390, height: 844 });
   await specialist.screenshot({ path: fileURLToPath(new URL('specialist-mobile.png', out)), fullPage: true });
   assert.ok(await specialist.locator('.teacher-grid').evaluate(el => el.getBoundingClientRect().right <= innerWidth));
-  await specialist.waitForFunction(() => { const p = JSON.parse(localStorage.getItem('weeklyPlan_v3') || '{}'); return p.classes?.length === 2 && Object.values(p.classPlans || {}).some(cp => Object.values(cp.weeks).some(w => Object.values(w.days).some(d => Object.values(d.periods).some(s => s?.rescheduledTo)))); });
+  await specialist.waitForFunction(() => { const p = JSON.parse(localStorage.getItem('weeklyPlan_v4') || '{}'); return p.classes?.length === 2 && Object.values(p.classPlans || {}).some(cp => Object.values(cp.weeks).some(w => Object.values(w.days).some(d => Object.values(d.periods).some(s => s?.rescheduledTo)))); });
   await specialist.reload({ waitUntil: 'networkidle' });
   assert.equal(await specialist.getByLabel('学級', { exact: true }).locator('option').count(), 2);
   await specialist.getByRole('tab', { name: '準備・振替', exact: true }).click();
@@ -258,7 +258,7 @@ try {
   const oldV2 = { version: 2, meta: { grade: 3, className: '2', teacherName: '', schoolYear: 2026 }, weeks: { '2026-09-28': { weekStart: '2026-09-28', grade: 3, days: { '2026-09-28': { gyozen: { text: '朝読書' }, periods: { 1: { subjectId: 'ongaku', status: 'done', minutes: 45, unit: '旧データの歌', memo: '原本保持' } } } } } }, tasks: [], events: {}, curriculum: [] };
   const migratedV2 = await newPage({ key: 'weeklyPlan_v2', value: JSON.stringify(oldV2) }); activePage = migratedV2;
   assert.ok((await migratedV2.locator('.cell-drop').first().innerText()).includes('旧データの歌'));
-  await migratedV2.waitForFunction(() => JSON.parse(localStorage.getItem('weeklyPlan_v3') || '{}').version === 3);
+  await migratedV2.waitForFunction(() => JSON.parse(localStorage.getItem('weeklyPlan_v4') || '{}').version === 4);
   assert.equal(await migratedV2.evaluate(() => localStorage.getItem('weeklyPlan_v2')), JSON.stringify(oldV2));
   await migratedV2.close();
   const invalid = await newPage({ key: 'weeklyPlan_v2', value: '{broken-json' });
@@ -266,9 +266,9 @@ try {
   assert.ok((await invalid.getByRole('alert').innerText()).includes('自動保存を停止'));
   assert.equal(await invalid.evaluate(() => localStorage.getItem('weeklyPlan_v2')), '{broken-json');
   await invalid.close();
-  const nullPlan = await newPage({ key: 'weeklyPlan_v3', value: 'null' }); activePage = nullPlan;
+  const nullPlan = await newPage({ key: 'weeklyPlan_v4', value: 'null' }); activePage = nullPlan;
   assert.ok((await nullPlan.getByRole('alert').innerText()).includes('自動保存を停止'));
-  assert.equal(await nullPlan.evaluate(() => localStorage.getItem('weeklyPlan_v3')), 'null');
+  assert.equal(await nullPlan.evaluate(() => localStorage.getItem('weeklyPlan_v4')), 'null');
   await nullPlan.close();
 
   const unavailable = await browser.newPage();
