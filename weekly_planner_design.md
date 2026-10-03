@@ -1,6 +1,6 @@
 # 週案エディタ｜第1層（週案コア）詳細設計書
 
-> 本書はv1の設計記録です。現行v2の保存・実施時数・Excel取込・GAS設計は [docs/architecture-v2.md](docs/architecture-v2.md) を参照してください。実装の正本は `index.html` です。
+> 本書はv1の設計記録です。現行の専科・学級別保存・振替・準備・CSV設計は [docs/architecture-v3.md](docs/architecture-v3.md)、共通の時数・Excel・GAS設計は [docs/architecture-v2.md](docs/architecture-v2.md) を参照してください。実装の正本は `index.html` です。
 
 ## 0. このドキュメントの位置づけ
 

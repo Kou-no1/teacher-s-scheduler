@@ -46,6 +46,12 @@ input,select,textarea{font-family:inherit;box-sizing:border-box}
 .muted{font-size:11px;color:#667085}.error-text{font-size:12px;color:#B91C1C;margin:8px 0}
 .cell-drop:focus-visible{outline:2px solid #137F76;outline-offset:-2px}.grid-wrap{min-width:0}.grid-wrap input{min-width:0}
 .print-title{display:none}.resource-list{display:flex;gap:8px;flex-wrap:wrap;font-size:12px;margin:8px 0}.resource-list a{color:#166B9A;overflow-wrap:anywhere}
+.class-selector{display:flex;align-items:center;gap:5px;font-size:12px}.class-selector select{max-width:180px;padding:5px;border:1px solid #CDD3DB;border-radius:5px;background:white}
+.check-options{display:flex;flex-wrap:wrap;gap:10px;margin:10px 0;font-size:12px}.check-options label{display:flex;align-items:center;gap:4px}
+.teacher-view{display:flex;flex-direction:column}.teacher-grid{display:grid;grid-template-columns:32px repeat(5,minmax(0,1fr));grid-template-rows:40px repeat(6,minmax(0,1fr));flex:1;gap:1px;background:#DCE1E8;border:1px solid #DCE1E8;min-height:470px}
+.teacher-grid>div{background:white;padding:5px;min-width:0;overflow-wrap:anywhere}.teacher-grid .teacher-cell{min-height:0;overflow:auto}.teacher-cell.conflict{background:#FEF2F2}.teacher-cell button{display:flex;align-items:center;flex-wrap:wrap;gap:3px 5px;width:100%;text-align:left;background:#F4F8F7;color:#374151;border-radius:4px;padding:5px;margin-bottom:3px;font-size:11px;line-height:1.35;overflow-wrap:anywhere}
+.prep-row{display:flex;align-items:flex-start;gap:9px;padding:12px 0;border-bottom:1px solid #E5E7EB;font-size:13px}.prep-row>div{min-width:0;overflow-wrap:anywhere}.candidate-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}.candidate-list button{padding:9px;background:#F4F8F7;color:#374151;border:1px solid #CDD3DB;border-radius:5px;font-size:12px}.candidate-list button[aria-pressed="true"]{border-color:#137F76;background:#E8F5F1}
+@media(max-width:720px){.view-tabs{overflow-x:auto;flex-shrink:0}.view-tabs button{white-space:nowrap;padding:6px 8px;font-size:11px}.class-selector{flex:1;justify-content:flex-end}.class-selector select{max-width:130px}.teacher-grid>div{padding:3px}.teacher-cell button{padding:3px;font-size:10px}.candidate-list{grid-template-columns:1fr}}
 @media(max-width:720px){.app-header{padding:7px!important}.app-body{flex-direction:column}.sidebar{width:100%!important;max-height:122px;display:block!important;border-right:0!important;border-bottom:1px solid #E5E7EB}.sidebar-tasks,.sidebar-counter{display:none}.grid-wrap{padding:4px!important}.page-view{padding:10px}.fields{grid-template-columns:1fr}.calendar-day{min-height:72px}.calendar-grid>div{padding:4px}.view-tabs{order:3;width:100%}.app-header .week-controls{gap:3px!important;flex-wrap:wrap}.cell-drop{padding:2px!important}}
 @media(max-width:720px){.week-controls{width:100%;justify-content:space-between}.week-controls>div{min-width:80px!important}.week-controls button{padding:6px 8px!important}}
 
@@ -125,7 +131,7 @@ const addDays=(d,n)=>{const x=new Date(d);x.setDate(x.getDate()+n);return x};
 const getMonday=d=>{const x=new Date(d);const day=x.getDay();const diff=day===0?-6:1-day;return addDays(x,diff)};
 const fmtMD=d=>`${d.getMonth()+1}/${d.getDate()}`;
 
-const STORAGE_KEY='weeklyPlan_v2';
+const STORAGE_KEY='weeklyPlan_v3';
 const isRecord=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
 const clone=v=>JSON.parse(JSON.stringify(v));
 const today=()=>toKey(new Date());
@@ -144,14 +150,14 @@ function stableId(text){
 function safeUrl(value){
   try{const u=new URL(String(value));return ['https:','http:'].includes(u.protocol)?u.href:null}catch{return null}
 }
-function createInitialState(){
+function createLegacyInitialState(){
   return {version:2,meta:{grade:5,className:'1',teacherName:'',schoolYear:schoolYearOf(today())},subjects:clone(DEFAULT_SUBJECTS),events:{},weeks:{},tasks:[],curriculum:[]};
 }
 // 破損データは黙って上書きせず、呼出側で保存停止と原本の書出を行う。
-function normalizePlan(raw){
+function normalizeLegacyPlan(raw){
   if(!isRecord(raw)||![1,2].includes(raw.version))throw new Error('対応していない保存形式です');
   if(raw.meta!=null&&!isRecord(raw.meta))throw new Error('設定データの形式が不正です');
-  const initial=createInitialState();
+  const initial=createLegacyInitialState();
   const meta={...initial.meta,...raw.meta};
   if(!Number.isInteger(Number(meta.grade))||meta.grade<1||meta.grade>6)throw new Error('学年の形式が不正です');
   if(!Number.isInteger(Number(meta.schoolYear))||meta.schoolYear<1900||meta.schoolYear>2199)throw new Error('年度の形式が不正です');
@@ -221,6 +227,82 @@ function normalizePlan(raw){
   if(new Set(curriculum.map(c=>c.id)).size!==curriculum.length||new Set(curriculum.map(c=>`${c.schoolYear}|${c.grade}|${c.subjectId}`)).size!==curriculum.length)throw new Error('同年度・学年・教科の指導計画が重複しています');
   return {version:2,meta,subjects:[...subjectMap.values()],events,weeks,tasks,curriculum};
 }
+const classLabel=c=>`${c.grade}年${c.className}組`;
+function migratePlan(legacy){
+  const classes=[],classPlans={};
+  const ensure=(year,grade)=>{
+    const className=legacy.meta.className||'1';
+    const id=stableId(`class|${year}|${grade}|${className}`);
+    if(!classes.some(c=>c.id===id)){
+      classes.push({id,schoolYear:year,grade,className,subjectIds:legacy.subjects.map(s=>s.id)});
+      classPlans[id]={weeks:{}};
+    }
+    return id;
+  };
+  const activeClassId=ensure(legacy.meta.schoolYear,legacy.meta.grade);
+  Object.entries(legacy.weeks).forEach(([key,week])=>Object.entries(week.days).forEach(([date,day])=>{
+    const id=ensure(schoolYearOf(date),week.grade),weeks=classPlans[id].weeks;
+    if(!weeks[key])weeks[key]={weekStart:key,grade:week.grade,days:{}};
+    weeks[key].days[date]=clone(day);
+    PERIODS.forEach(p=>{const s=weeks[key].days[date].periods[p];if(s)Object.assign(s,{lessonId:s.lessonId||stableId(`${id}|${date}|${p}`),cancelReason:s.cancelReason||'',rescheduledFrom:null,rescheduledTo:null})});
+  }));
+  return {version:3,meta:{teacherName:legacy.meta.teacherName,schoolYear:legacy.meta.schoolYear,role:'homeroom'},activeClassId,classes,classPlans,subjects:legacy.subjects,events:legacy.events,curriculum:legacy.curriculum,tasks:legacy.tasks.map(t=>({...t,classId:classes.find(c=>c.schoolYear===schoolYearOf(t.date)&&c.grade===legacy.meta.grade)?.id||null})),preparations:{}};
+}
+function createInitialState(){return migratePlan(createLegacyInitialState())}
+function normalizePlan(raw){
+  if(raw?.version===1||raw?.version===2)return migratePlan(normalizeLegacyPlan(raw));
+  if(!isRecord(raw)||raw.version!==3)throw new Error('対応していない保存形式です');
+  if(!isRecord(raw.meta)||!['homeroom','specialist'].includes(raw.meta.role)||!Array.isArray(raw.classes)||!raw.classes.length||!isRecord(raw.classPlans))throw new Error('担当学級の形式が不正です');
+  const base=normalizeLegacyPlan({...raw,version:2,meta:{...raw.meta,grade:5,className:''},weeks:{}});
+  const ids=new Set(),names=new Set();
+  const classes=raw.classes.map(c=>{
+    if(!isRecord(c)||typeof c.id!=='string'||!c.id||['__proto__','constructor','prototype'].includes(c.id)||ids.has(c.id)||!Number.isInteger(c.schoolYear)||c.schoolYear<1900||c.schoolYear>2199||!Number.isInteger(c.grade)||c.grade<1||c.grade>6||typeof c.className!=='string'||!c.className.trim()||!Array.isArray(c.subjectIds)||!c.subjectIds.length||c.subjectIds.some(id=>!base.subjects.some(s=>s.id===id)))throw new Error('学級ID・年度・学年・担当教科が不正です');
+    const name=`${c.schoolYear}|${c.grade}|${c.className.trim()}`;
+    if(names.has(name))throw new Error('同じ年度・学年・組の学級が重複しています');
+    ids.add(c.id);names.add(name);return {...c,className:c.className.trim(),subjectIds:[...new Set(c.subjectIds)]};
+  });
+  if(Object.keys(raw.classPlans).some(id=>!ids.has(id)))throw new Error('未登録学級の週案が含まれています');
+  const classPlans={},lessonIds=new Set();
+  classes.forEach(c=>{
+    const saved=raw.classPlans[c.id];
+    if(saved!=null&&(!isRecord(saved)||!isRecord(saved.weeks)))throw new Error('学級週案の形式が不正です');
+    const weeks=normalizeLegacyPlan({version:2,meta:{...base.meta,grade:c.grade,schoolYear:c.schoolYear},weeks:saved?.weeks||{}}).weeks;
+    Object.values(weeks).forEach(w=>{
+      if(w.grade!==c.grade)throw new Error('学級と週案の学年が一致しません');
+      Object.entries(w.days).forEach(([date,day])=>{
+        if(!inSchoolYear(date,c.schoolYear))throw new Error('学級の年度外の授業が含まれています');
+        PERIODS.forEach(p=>{
+          const s=day.periods[p];if(!s)return;
+          const lessonId=s.lessonId||stableId(`${c.id}|${date}|${p}`);
+          if(typeof lessonId!=='string'||!lessonId||lessonIds.has(lessonId))throw new Error('授業IDが不正・重複しています');
+          lessonIds.add(lessonId);s.lessonId=lessonId;s.cancelReason=String(s.cancelReason||'');
+          ['rescheduledFrom','rescheduledTo'].forEach(field=>{
+            const ref=s[field];if(ref!=null&&(!isRecord(ref)||!ids.has(ref.classId)||!validDate(ref.date)||!PERIODS.includes(ref.period)||typeof ref.lessonId!=='string'))throw new Error('振替参照の形式が不正です');
+            s[field]=ref||null;
+          });
+        });
+      });
+    });
+    classPlans[c.id]={weeks};
+  });
+  Object.entries(classPlans).forEach(([classId,cp])=>Object.values(cp.weeks).forEach(w=>Object.entries(w.days).forEach(([date,day])=>PERIODS.forEach(period=>{
+    const s=day.periods[period];if(!s)return;
+    ['rescheduledFrom','rescheduledTo'].forEach(field=>{
+      const ref=s[field];if(!ref)return;
+      const other=getLesson(classPlans,ref),back=other?.[field==='rescheduledTo'?'rescheduledFrom':'rescheduledTo'];
+      if(ref.classId!==classId||!other||other.lessonId!==ref.lessonId||other.subjectId!==s.subjectId||!back||back.classId!==classId||back.date!==date||back.period!==period||back.lessonId!==s.lessonId||(field==='rescheduledTo'&&(s.status!=='cancelled'||ref.date<=date))||(field==='rescheduledFrom'&&ref.date>=date))throw new Error('振替元・先の参照が一致しません');
+    });
+  }))));
+  const preparations=raw.preparations??{};
+  if(!isRecord(preparations)||Object.entries(preparations).some(([key,checks])=>!validDate(key)||parseKey(key).getDay()!==1||!isRecord(checks)||Object.values(checks).some(v=>typeof v!=='boolean')))throw new Error('準備チェックの形式が不正です');
+  const tasks=base.tasks.map(t=>{if(t.classId!=null&&!ids.has(t.classId))throw new Error('タスクの学級参照が不正です');return {...t,classId:t.classId||null}});
+  base.events&&Object.values(base.events).flat().forEach(e=>{
+    if(e.grade!=null&&(!Number.isInteger(e.grade)||e.grade<1||e.grade>6))throw new Error('行事の対象学年が不正です');
+    if(e.blockedPeriods!=null&&(!Array.isArray(e.blockedPeriods)||e.blockedPeriods.some(p=>!PERIODS.includes(p))))throw new Error('行事の対象限が不正です');
+  });
+  const activeClassId=ids.has(raw.activeClassId)?raw.activeClassId:classes.find(c=>c.schoolYear===base.meta.schoolYear)?.id||classes[0].id;
+  return {version:3,meta:{teacherName:base.meta.teacherName,schoolYear:base.meta.schoolYear,role:raw.meta.role},activeClassId,classes,classPlans,subjects:base.subjects,events:base.events,curriculum:base.curriculum,tasks,preparations:clone(preparations)};
+}
 function savePlan(state){
   // TODO(第3層): 本人のDrive保存アダプター。メモ送信は明示的な設定が必要。
   localStorage.setItem(STORAGE_KEY,JSON.stringify(state));
@@ -228,9 +310,11 @@ function savePlan(state){
 function loadPlan(){
   try{
     const current=localStorage.getItem(STORAGE_KEY);
-    const legacy=current==null?localStorage.getItem('weeklyPlan_v1'):null;
+    const legacy=current==null?(localStorage.getItem('weeklyPlan_v2')??localStorage.getItem('weeklyPlan_v1')):null;
     const raw=current??legacy;
-    return {plan:raw?normalizePlan(JSON.parse(raw)):createInitialState(),error:'',blocked:false,migrated:!!legacy};
+    if(raw===null)return {plan:createInitialState(),error:'',blocked:false,migrated:false};
+    const parsed=JSON.parse(raw);
+    return {plan:normalizePlan(parsed),error:'',blocked:false,migrated:parsed.version!==3};
   }catch(e){return {plan:createInitialState(),error:`保存データを読み込めません: ${e.message}`,blocked:true,migrated:false}}
 }
 function downloadText(name,text,type='application/json'){
@@ -238,7 +322,7 @@ function downloadText(name,text,type='application/json'){
   const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 function exportSavedOriginal(){
-  try{downloadText('weekly-plan-original.json',localStorage.getItem(STORAGE_KEY)||localStorage.getItem('weeklyPlan_v1')||'{}')}catch(e){alert(e.message)}
+  try{downloadText('weekly-plan-original.json',localStorage.getItem(STORAGE_KEY)||localStorage.getItem('weeklyPlan_v2')||localStorage.getItem('weeklyPlan_v1')||'{}')}catch(e){alert(e.message)}
 }
 
 /* TODO(第3層): tasks を Googleタスクと同期（loadTasks/saveTasks を差し替え） */
@@ -257,23 +341,136 @@ function listLessons(weeks,grade,schoolYear){
   });
   return result;
 }
-function calculateHourSummary({subjects,weeks,grade,schoolYear,asOf=today(),todayKey=today()}){
+function calculateHourSummary({subjects,weeks,grade,schoolYear,asOf=today(),todayKey=today(),subjectIds=null}){
   const standards=STANDARD_HOURS[String(grade)]||STANDARD_HOURS[grade]||{};
   const lessons=listLessons(weeks,grade,schoolYear);
   const ids=new Set([...subjects.map(s=>s.id),...Object.keys(standards),...lessons.map(s=>s.subjectId)]);
-  return [...ids].map(id=>{
+  return [...ids].filter(id=>!subjectIds||subjectIds.includes(id)).map(id=>{
     const subject=subjects.find(s=>s.id===id)||{id,name:`未登録教科 (${id})`,short:id,color:'#7B8494'};
     const slots=lessons.filter(s=>s.subjectId===id);
     const planned=slots.filter(s=>s.status!=='cancelled').reduce((sum,s)=>sum+s.hours,0);
     const actual=slots.filter(s=>s.status==='done'&&s.date<=asOf&&s.date<=todayKey).reduce((sum,s)=>sum+s.hours,0);
+    const cancelled=slots.filter(s=>s.status==='cancelled').reduce((sum,s)=>sum+s.hours,0);
     const standard=Object.prototype.hasOwnProperty.call(standards,subject.id)?standards[subject.id]:null;
     const remaining=standard==null?null:Math.max(0,standard-actual);
     const progress=standard?Math.round((actual/standard)*1000)/10:null;
     return {
-      subject,planned,actual,standard,remaining,progress,isOver:standard!=null&&actual>standard
+      subject,planned,actual,cancelled,standard,remaining,progress,isOver:standard!=null&&actual>standard
     };
-  }).filter(row=>row.planned>0||row.standard!=null);
+  }).filter(row=>row.planned>0||row.cancelled>0||row.standard!=null);
 }
+
+function getLesson(classPlans,ref){
+  return classPlans[ref.classId]?.weeks[toKey(getMonday(parseKey(ref.date)))]?.days[ref.date]?.periods[ref.period]||null;
+}
+function assignedLessons(state,schoolYear=state.meta.schoolYear){
+  return state.classes.filter(c=>c.schoolYear===schoolYear).flatMap(c=>listLessons(state.classPlans[c.id]?.weeks||{},c.grade,c.schoolYear).filter(s=>state.meta.role!=='specialist'||c.subjectIds.includes(s.subjectId)).map(s=>({...s,classId:c.id,classLabel:classLabel(c),grade:c.grade})));
+}
+function eventBlocks(events,date,period,grade){
+  return (events[date]||[]).some(e=>(e.grade==null||e.grade===grade)&&(e.type==='holiday'||e.blockedPeriods?.includes(period)));
+}
+function teacherConflicts(state,date,period,except=null){
+  if(state.meta.role!=='specialist')return [];
+  return assignedLessons(state,schoolYearOf(date)).filter(s=>s.date===date&&s.period===period&&s.status!=='cancelled'&&(!except||s.lessonId!==except.lessonId));
+}
+function rescheduleCandidates(state,origin,startDate,endDate,todayKey=today()){
+  const c=state.classes.find(c=>c.id===origin.classId),source=getLesson(state.classPlans,origin);
+  if(!c||!source||source.lessonId!==origin.lessonId||source.status!=='cancelled'||source.rescheduledTo||(state.meta.role==='specialist'&&!c.subjectIds.includes(source.subjectId)))return [];
+  if(!validDate(startDate)||!validDate(endDate)||startDate>endDate||startDate<=todayKey||startDate<=origin.date||!inSchoolYear(startDate,c.schoolYear)||!inSchoolYear(endDate,c.schoolYear)||toKey(addDays(parseKey(startDate),27))<endDate)return [];
+  const result=[];
+  for(let d=parseKey(startDate);toKey(d)<=endDate;d=addDays(d,1)){
+    if(d.getDay()===0||d.getDay()===6)continue;
+    const date=toKey(d);
+    PERIODS.forEach(period=>{
+      const ref={classId:c.id,date,period};
+      if(!getLesson(state.classPlans,ref)&&!eventBlocks(state.events,date,period,c.grade)&&!teacherConflicts(state,date,period).length)result.push(ref);
+    });
+  }
+  return result;
+}
+function writeLesson(classPlans,c,ref,slot){
+  const key=toKey(getMonday(parseKey(ref.date))),cp=classPlans[c.id]||(classPlans[c.id]={weeks:{}});
+  const week=cp.weeks[key]||(cp.weeks[key]={weekStart:key,grade:c.grade,days:{}});
+  const day=week.days[ref.date]||(week.days[ref.date]={gyozen:{text:''},periods:{}});
+  day.periods[ref.period]=slot;
+}
+function replaceLesson(state,ref,data){
+  const c=state.classes.find(c=>c.id===ref.classId);
+  if(!c||!validDate(ref.date)||!PERIODS.includes(ref.period)||!inSchoolYear(ref.date,c.schoolYear))throw new Error('選択学級の年度内のコマを指定してください');
+  if(data&&(!['planned','done','cancelled'].includes(data.status)||typeof data.subjectId!=='string'||!Number.isFinite(data.minutes)||data.minutes<=0||data.minutes>180||(data.status==='done'&&ref.date>today())))throw new Error('教科・実施状態・授業分数を確認してください。未来の実施は登録できません');
+  const old=getLesson(state.classPlans,ref),next=clone(state.classPlans);
+  if(old?.rescheduledTo&&(!data||data.status!=='cancelled'||data.subjectId!==old.subjectId))throw new Error('振替済みの中止記録は変更・削除できません。先に振替先をクリアしてください');
+  const replacement=!data||data.subjectId!==old?.subjectId;
+  if(old?.rescheduledFrom&&replacement){
+    const source=getLesson(next,old.rescheduledFrom);
+    if(source?.lessonId===old.rescheduledFrom.lessonId&&source.rescheduledTo?.lessonId===old.lessonId)source.rescheduledTo=null;
+  }
+  const slot=data?{...(replacement?{}:old),...data,lessonId:replacement?uid():(old?.lessonId||uid()),cancelReason:data.cancelReason??old?.cancelReason??'',rescheduledFrom:replacement?null:old?.rescheduledFrom||null,rescheduledTo:old?.rescheduledTo||null}:null;
+  writeLesson(next,c,ref,slot);return next;
+}
+function rescheduleLesson(state,origin,target,todayKey=today()){
+  const source=getLesson(state.classPlans,origin),c=state.classes.find(c=>c.id===origin.classId);
+  if(!c||source?.lessonId!==origin.lessonId||source?.status!=='cancelled'||source.rescheduledTo)throw new Error('振替元が変更済み、または振替済みです');
+  if(target.classId!==origin.classId||!rescheduleCandidates(state,origin,target.date,target.date,todayKey).some(r=>r.period===target.period))throw new Error('候補は現在利用できません。予定・行事・担当授業を確認してください');
+  const next=clone(state.classPlans),lessonId=uid();
+  writeLesson(next,c,target,{...clone(source),lessonId,status:'planned',cancelReason:'',rescheduledFrom:{...origin},rescheduledTo:null});
+  getLesson(next,origin).rescheduledTo={...target,lessonId};return next;
+}
+function copyClassWeek(state,classId,key){
+  const c=state.classes.find(c=>c.id===classId),oldKey=toKey(addDays(parseKey(key),-7)),prev=state.classPlans[classId]?.weeks[oldKey];
+  if(!prev)throw new Error('前の週のデータがありません');
+  let classPlans=clone(state.classPlans);
+  const oldTarget=classPlans[classId]?.weeks[key];
+  if(oldTarget){
+    // 振替済み中止記録を週コピーで消さない。振替先だけなら参照を解除してから上書きする。
+    const slots=Object.entries(oldTarget.days).flatMap(([date,day])=>PERIODS.map(period=>({date,period,slot:day.periods[period]})));
+    if(slots.some(s=>s.slot?.rescheduledTo))throw new Error('振替済みの中止記録を含む週は上書きできません');
+    slots.filter(s=>s.slot?.rescheduledFrom).forEach(s=>{classPlans=replaceLesson({...state,classPlans},{classId,date:s.date,period:s.period},null)});
+  }
+  const days={};
+  Object.entries(prev.days).forEach(([date,day])=>{
+    const newDate=toKey(addDays(parseKey(date),7));if(!inSchoolYear(newDate,c.schoolYear))return;
+    const copied=clone(day);
+    PERIODS.forEach(p=>{const s=copied.periods[p];if(s)Object.assign(s,{lessonId:uid(),status:'planned',cancelReason:'',rescheduledFrom:null,rescheduledTo:null})});
+    days[newDate]=copied;
+  });
+  if(!Object.keys(days).length)throw new Error('コピー先は選択学級の年度外です');
+  classPlans[classId].weeks[key]={weekStart:key,grade:c.grade,days};return classPlans;
+}
+function preparationList(state,weekStart,classIds){
+  const end=toKey(addDays(parseKey(weekStart),4)),groups=new Map();
+  assignedLessons(state).filter(s=>classIds.includes(s.classId)&&s.date>=weekStart&&s.date<=end&&s.status!=='cancelled').forEach(s=>{
+    [...new Set(s.items.split(/[\n、,・]+/).map(v=>v.trim()).filter(Boolean))].forEach(item=>{
+      if(!groups.has(item))groups.set(item,[]);
+      groups.get(item).push({classId:s.classId,classLabel:s.classLabel,date:s.date,period:s.period,lessonId:s.lessonId,subjectId:s.subjectId});
+    });
+  });
+  return [...groups].map(([item,uses])=>({item,uses,key:stableId(JSON.stringify([weekStart,item,uses.map(s=>`${s.classId}|${s.date}|${s.period}|${s.lessonId}`).sort()]))})).sort((a,b)=>a.item.localeCompare(b.item,'ja'));
+}
+const CSV_HEADERS=['年度','学級ID','学年','組','教科','集計開始日','集計終了日','実施基準日','年間標準時数','期間計画時数','期間実施時数','期間中止時数','年度実施時数','年度達成率(%)'];
+function hourReportRows(state,{classIds,startDate,endDate,asOf,todayKey=today()}){
+  if(!validDate(startDate)||!validDate(endDate)||!validDate(asOf)||startDate>endDate||asOf>todayKey||!inSchoolYear(startDate,state.meta.schoolYear)||!inSchoolYear(endDate,state.meta.schoolYear))throw new Error('年度内の集計期間と今日以前の基準日を指定してください');
+  const rows=[];
+  state.classes.filter(c=>classIds.includes(c.id)&&c.schoolYear===state.meta.schoolYear).forEach(c=>{
+    const weeks=state.classPlans[c.id]?.weeks||{},lessons=listLessons(weeks,c.grade,c.schoolYear);
+    const summary=calculateHourSummary({subjects:state.subjects,weeks,grade:c.grade,schoolYear:c.schoolYear,asOf,todayKey,subjectIds:state.meta.role==='specialist'?c.subjectIds:null});
+    summary.forEach(r=>{
+      const slots=lessons.filter(s=>s.subjectId===r.subject.id&&s.date>=startDate&&s.date<=endDate);
+      const count=fn=>Number(slots.filter(fn).reduce((sum,s)=>sum+s.hours,0).toFixed(2));
+      rows.push([c.schoolYear,c.id,c.grade,c.className,r.subject.name,startDate,endDate,asOf,r.standard??'',count(s=>s.status!=='cancelled'),count(s=>s.status==='done'&&s.date<=asOf&&s.date<=todayKey),count(s=>s.status==='cancelled'),Number(r.actual.toFixed(2)),r.progress??'']);
+    });
+  });return rows;
+}
+function encodeCSV(rows){
+  const escape=v=>{
+    if(typeof v==='number')return String(v);
+    let text=String(v??'');if(/^[\s\uFEFF]*[=+\-@]/.test(text)||/^[\t\r\n]/.test(text))text="'"+text;
+    return '"'+text.replace(/"/g,'""')+'"';
+  };
+  return '\uFEFF'+[CSV_HEADERS,...rows].map(row=>row.map(escape).join(',')).join('\r\n')+'\r\n';
+}
+// TODO(学校暦): rescheduleCandidatesへ校時・休業期間・他教員の占有情報を注入する。
+// TODO(準備): 数量・在庫はitemsの文字列から推測せず別データで管理する。
 
 function HourCounterPanel({summary,grade}){
   const totalPlanned=summary.filter(row=>row.standard!=null).reduce((sum,row)=>sum+row.actual,0);
@@ -385,7 +582,7 @@ function mergeEvents(previous,entries,mode,year){
   if(mode==='replace')Object.keys(next).forEach(date=>{if(inSchoolYear(date,year))delete next[date]});
   entries.forEach(({date,...event})=>{
     if(!next[date])next[date]=[];
-    if(!next[date].some(old=>old.id===event.id||(old.title===event.title&&old.type===event.type)))next[date].push(event);
+    if(!next[date].some(old=>old.id===event.id||(old.title===event.title&&old.type===event.type&&(old.grade??null)===(event.grade??null))))next[date].push(event);
   });
   return next;
 }
@@ -481,7 +678,7 @@ function ExcelImportModal({onClose,onImport,kind='events',meta,subjects}){
 /* ════════════════════════════════════════════════
    コマ編集ポップアップ
 ════════════════════════════════════════════════ */
-function CellEditor({cell,subjects,grade,curriculum,schoolYear,onSave,onClose,onDelete}){
+function CellEditor({cell,subjects,grade,curriculum,schoolYear,onSave,onClose,onDelete,onReschedule}){
   const[subjectId,setSubjectId]=useState(cell.data?.subjectId||'');
   const[unit,setUnit]=useState(cell.data?.unit||'');
   const[sub,setSub]=useState(cell.data?.sub||'');
@@ -493,6 +690,7 @@ function CellEditor({cell,subjects,grade,curriculum,schoolYear,onSave,onClose,on
   const[minutes,setMinutes]=useState(cell.data?.minutes??45);
   const[unitId,setUnitId]=useState(cell.data?.curriculumUnitId||'');
   const[error,setError]=useState('');
+  const[cancelReason,setCancelReason]=useState(cell.data?.cancelReason||'');
 
   const subj=subjects.find(s=>s.id===subjectId);
   const units=curriculum.filter(c=>c.subjectId===subjectId&&c.grade===grade&&c.schoolYear===schoolYear).flatMap(c=>c.units);
@@ -504,11 +702,12 @@ function CellEditor({cell,subjects,grade,curriculum,schoolYear,onSave,onClose,on
     try{await navigator.clipboard.writeText(text);setCopied(true);setTimeout(()=>setCopied(false),1800)}
     catch{prompt('以下をコピーしてください',text)}
   };
-  const save=()=>{
+  const save=(openCandidates=false)=>{
     if(!subjectId){setError('教科を選択してください');return}
     if(!Number.isFinite(Number(minutes))||minutes<=0||minutes>180){setError('授業分数は1〜180分で指定してください');return}
     if(status==='done'&&cell.dayKey>today()){setError('未来の授業は実施済みにできません');return}
-    onSave({subjectId,unit,sub,items,memo,status,minutes:Number(minutes),curriculumUnitId:unitId||null});
+    const data={subjectId,unit,sub,items,memo,status,minutes:Number(minutes),curriculumUnitId:unitId||null,cancelReason:status==='cancelled'?cancelReason:''};
+    try{if(openCandidates)onReschedule(data);else onSave(data)}catch(e){setError(e.message)}
   };
 
   return(
@@ -534,6 +733,9 @@ function CellEditor({cell,subjects,grade,curriculum,schoolYear,onSave,onClose,on
         <Field label="年間指導計画の単元"><select value={unitId} onChange={e=>{setUnitId(e.target.value);const selected=units.find(u=>u.id===e.target.value);if(selected)setUnit(selected.title)}}>
           <option value="">未紐付け</option>{unitId&&!linkedUnit&&<option value={unitId}>単元の再指定が必要</option>}{units.map(u=><option key={u.id} value={u.id}>{u.title}（{u.plannedHours}時）</option>)}
         </select></Field>
+        {status==='cancelled'&&<Field label="中止理由"><input value={cancelReason} onChange={e=>setCancelReason(e.target.value)}/></Field>}
+        {cell.data?.rescheduledTo&&<p className="muted">振替先: {cell.data.rescheduledTo.date} {cell.data.rescheduledTo.period}限</p>}
+        {cell.data?.rescheduledFrom&&<p className="muted">振替元: {cell.data.rescheduledFrom.date} {cell.data.rescheduledFrom.period}限</p>}
         {linkedUnit&&<div className="resource-list">{linkedUnit.resources.map((r,i)=><a key={i} href={r.url} target="_blank" rel="noopener noreferrer">{r.title}</a>)}</div>}
 
         <label style={{fontSize:11,fontWeight:'800',color:'#6B7280',display:'block',marginBottom:4}}>単元名</label>
@@ -569,11 +771,12 @@ function CellEditor({cell,subjects,grade,curriculum,schoolYear,onSave,onClose,on
 
         {error&&<p className="error-text" role="alert">{error}</p>}
         <div style={{display:'flex',gap:8}}>
-          {cell.data&&<button onClick={onDelete} style={{padding:'10px 16px',borderRadius:12,background:'#FEE2E2',color:'#DC2626',fontSize:13,fontWeight:'800'}}>クリア</button>}
+          {cell.data&&<button onClick={()=>{try{onDelete()}catch(e){setError(e.message)}}} style={{padding:'10px 16px',borderRadius:8,background:'#FEE2E2',color:'#DC2626',fontSize:13,fontWeight:'800'}}>クリア</button>}
           <button onClick={onClose} style={{padding:'10px 16px',borderRadius:12,background:'#F3F4F6',color:'#6B7280',fontSize:13,fontWeight:'800'}}>閉じる</button>
-          <button onClick={save}
+          <button onClick={()=>save()}
             style={{flex:1,padding:'10px',borderRadius:12,background:'#4ECDC4',color:'white',fontSize:13,fontWeight:'900'}}>保存</button>
         </div>
+        {status==='cancelled'&&!cell.data?.rescheduledTo&&<button className="action" style={{marginTop:12}} onClick={()=>save(true)}>振替候補</button>}
     </Modal>
   );
 }
@@ -593,10 +796,13 @@ function buildICS(events,schoolYear,now=new Date()){
 }
 function EventEditor({date,events,onAdd,onDelete,onClose}){
   const[title,setTitle]=useState(''),[type,setType]=useState('school');
+  const[grade,setGrade]=useState(''),[blockedPeriods,setBlockedPeriods]=useState([]);
   return <Modal title={`${date} の行事`} onClose={onClose}>
-    {(events[date]||[]).map(ev=><div key={ev.id} style={{display:'flex',gap:12,alignItems:'center',padding:'8px 0',borderBottom:'1px solid #E5E7EB'}}><span style={{flex:1}}>{ev.title}</span><button className="action" onClick={()=>onDelete(date,ev.id)}>削除</button></div>)}
+    {(events[date]||[]).map(ev=><div key={ev.id} style={{display:'flex',gap:12,alignItems:'center',padding:'8px 0',borderBottom:'1px solid #E5E7EB'}}><span style={{flex:1}}>{ev.title}<small className="muted"> {ev.grade?`${ev.grade}年`:'全学年'} {ev.type==='holiday'?'休業':ev.blockedPeriods?.length?`${ev.blockedPeriods.join('・')}限`:''}</small></span><button className="action" onClick={()=>onDelete(date,ev.id)}>削除</button></div>)}
     <div className="fields"><Field label="行事名"><input value={title} onChange={e=>setTitle(e.target.value)}/></Field><Field label="行事種別"><select value={type} onChange={e=>setType(e.target.value)}><option value="school">学校行事</option><option value="gakunen">学年行事</option><option value="holiday">休業日</option></select></Field></div>
-    <div className="modal-actions"><button className="action" onClick={onClose}>閉じる</button><button className="action" disabled={!title.trim()} onClick={()=>{onAdd(date,{id:uid(),title:title.trim(),type});setTitle('')}}>追加</button></div>
+    <Field label="対象学年"><select value={grade} onChange={e=>setGrade(e.target.value)}><option value="">全学年</option>{[1,2,3,4,5,6].map(g=><option key={g} value={g}>{g}年</option>)}</select></Field>
+    {type!=='holiday'&&<><h3 style={{marginTop:14}}>授業を行わない限</h3><div className="check-options">{PERIODS.map(p=><label key={p}><input type="checkbox" checked={blockedPeriods.includes(p)} onChange={()=>setBlockedPeriods(prev=>prev.includes(p)?prev.filter(v=>v!==p):[...prev,p])}/>{p}限</label>)}</div></>}
+    <div className="modal-actions"><button className="action" onClick={onClose}>閉じる</button><button className="action" disabled={!title.trim()} onClick={()=>{onAdd(date,{id:uid(),title:title.trim(),type,grade:grade?Number(grade):null,blockedPeriods:type==='holiday'?[]:blockedPeriods});setTitle('');setBlockedPeriods([])}}>追加</button></div>
   </Modal>;
 }
 function callGasCalendar(payload){
@@ -661,17 +867,17 @@ function ResourceEditor({unit,onSave,onClose}){
     <div className="modal-actions"><button className="action" onClick={onClose}>閉じる</button><button className="action" onClick={()=>{const safe=safeUrl(url);if(!safe){setError('http または https のURLを指定してください');return}onSave([...unit.resources,{title:title.trim()||safe,url:safe}]);setTitle('');setUrl('');setError('')}}>リンクを追加</button></div>
   </Modal>;
 }
-function ProgressView({meta,subjects,weeks,curriculum,onImport,onResource}){
-  const[asOf,setAsOf]=useState(today()),[subjectId,setSubjectId]=useState('sansu');
-  const summary=useMemo(()=>calculateHourSummary({subjects,weeks,grade:meta.grade,schoolYear:meta.schoolYear,asOf}),[subjects,weeks,meta.grade,meta.schoolYear,asOf]);
+function ProgressView({meta,subjects,weeks,curriculum,subjectIds,onImport,onResource,onReport}){
+  const[asOf,setAsOf]=useState(today()),[subjectId,setSubjectId]=useState(subjects.some(s=>s.id==='sansu')?'sansu':subjects[0]?.id||'');
+  const summary=useMemo(()=>calculateHourSummary({subjects,weeks,grade:meta.grade,schoolYear:meta.schoolYear,asOf,subjectIds}),[subjects,weeks,meta.grade,meta.schoolYear,asOf,subjectIds]);
   const totalStandard=summary.reduce((sum,r)=>sum+(r.standard||0),0),totalActual=summary.filter(r=>r.standard!=null).reduce((sum,r)=>sum+r.actual,0);
   const plan=curriculum.find(c=>c.schoolYear===meta.schoolYear&&c.grade===meta.grade&&c.subjectId===subjectId);
   const lessons=listLessons(weeks,meta.grade,meta.schoolYear).filter(s=>s.subjectId===subjectId);
   const progress=plan?calculateCurriculumProgress(plan,lessons,asOf):null;
   const invalidDone=listLessons(weeks,meta.grade,meta.schoolYear).filter(s=>s.status==='done'&&s.date>today()).length;
   return <section className="page-view">
-    <div className="page-toolbar"><h2>時数・指導計画</h2><span>{meta.schoolYear}年度・{meta.grade}年</span><Field label="集計基準日"><input type="date" value={asOf} max={today()} onChange={e=>{if(validDate(e.target.value)&&e.target.value<=today())setAsOf(e.target.value)}}/></Field><button className="action" onClick={onImport}>指導計画Excel取込</button></div>
-    <div className="summary-line"><span>標準 {totalStandard}時</span><span>実施 {formatHours(totalActual)}時</span><span>年間達成率 {(totalActual/totalStandard*100).toFixed(1)}%</span></div>
+    <div className="page-toolbar"><h2>時数・指導計画</h2><span>{meta.schoolYear}年度・{meta.grade}年{meta.className}組</span><Field label="集計基準日"><input type="date" value={asOf} max={today()} onChange={e=>{if(validDate(e.target.value)&&e.target.value<=today())setAsOf(e.target.value)}}/></Field><button className="action" onClick={onImport}>指導計画Excel取込</button><button className="action" onClick={onReport}>時数報告CSV</button></div>
+    <div className="summary-line"><span>{subjectIds?'担当教科の標準':'標準'} {totalStandard}時</span><span>実施 {formatHours(totalActual)}時</span><span>年間達成率 {totalStandard?(totalActual/totalStandard*100).toFixed(1):'—'}%</span></div>
     {invalidDone>0&&<p className="error-text">未来の実施済み {invalidDone}コマは実施集計から除外しています。</p>}
     <div className="table-scroll"><table className="data-table"><thead><tr><th>教科</th><th>年間標準</th><th>年間計画</th><th>実施</th><th>標準まで</th><th>達成率</th></tr></thead><tbody>{summary.map(r=><tr key={r.subject.id}><td><button onClick={()=>setSubjectId(r.subject.id)} style={{background:'none',color:'#276981',fontWeight:700}}>{r.subject.name}</button></td><td className="number">{r.standard??'—'}</td><td className="number">{formatHours(r.planned)}</td><td className="number">{formatHours(r.actual)}</td><td className="number">{r.remaining==null?'—':formatHours(r.remaining)}</td><td>{r.progress==null?'標準なし':`${r.progress}%`}{r.progress!=null&&<div className="progress-track"><div style={{width:`${Math.min(100,r.progress)}%`}}/></div>}</td></tr>)}</tbody></table></div>
     <div className="page-toolbar" style={{marginTop:22}}><h2>単元進捗・教材研究</h2><Field label="比較する教科"><select value={subjectId} onChange={e=>setSubjectId(e.target.value)}>{subjects.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></Field></div>
@@ -682,10 +888,13 @@ function ProgressView({meta,subjects,weeks,curriculum,onImport,onResource}){
     </>:<div className="muted">この教科の年間指導計画は未登録です。</div>}
   </section>;
 }
-function SettingsModal({meta,setMeta,state,onRestore,onClose}){
+function SettingsModal({meta,setMeta,state,onRestore,onClose,onEditClass,onAddClass}){
   const[error,setError]=useState('');
   return <Modal title="設定・バックアップ" onClose={onClose}>
-    <div className="fields"><Field label="学年"><select value={meta.grade} onChange={e=>setMeta({...meta,grade:Number(e.target.value)})}>{[1,2,3,4,5,6].map(g=><option key={g} value={g}>{g}年</option>)}</select></Field><Field label="年度"><input type="number" min="1900" max="2199" value={meta.schoolYear} onChange={e=>{const y=Number(e.target.value);if(Number.isInteger(y)&&y>=1900&&y<=2199)setMeta({...meta,schoolYear:y})}}/></Field><Field label="組"><input value={meta.className} onChange={e=>setMeta({...meta,className:e.target.value})}/></Field><Field label="担任名"><input value={meta.teacherName} onChange={e=>setMeta({...meta,teacherName:e.target.value})}/></Field></div>
+    <div className="fields"><Field label="担当区分"><select value={meta.role} onChange={e=>setMeta({...meta,role:e.target.value})}><option value="homeroom">学級担任</option><option value="specialist">専科教員</option></select></Field><Field label="年度"><input type="number" min="1900" max="2199" value={meta.schoolYear} onChange={e=>{const y=Number(e.target.value);if(Number.isInteger(y)&&y>=1900&&y<=2199)setMeta({...meta,schoolYear:y})}}/></Field><Field label="教員名"><input value={meta.teacherName} onChange={e=>setMeta({...meta,teacherName:e.target.value})}/></Field></div>
+    <h3>担当学級</h3>
+    {state.classes.filter(c=>c.schoolYear===meta.schoolYear).map(c=><div className="prep-row" key={c.id}><span>{classLabel(c)}</span><span className="muted" style={{flex:1}}>{c.subjectIds.map(id=>state.subjects.find(s=>s.id===id)?.name||id).join('・')}</span><button className="action" onClick={()=>onEditClass(c)}>学級設定</button></div>)}
+    <button className="action" style={{margin:'10px 0'}} onClick={onAddClass}>学級を追加</button>
     <button className="action" onClick={()=>downloadText(`weekly-plan-${meta.schoolYear}.json`,JSON.stringify(state,null,2))}>JSONバックアップ</button>
     <Field label="JSONから復元"><input type="file" accept=".json,application/json" onChange={async e=>{
       const f=e.target.files[0];if(!f)return;
@@ -697,13 +906,89 @@ function SettingsModal({meta,setMeta,state,onRestore,onClose}){
   </Modal>;
 }
 
+function ClassEditor({classData,schoolYear,subjects,defaultSubjectIds,onSave,onClose}){
+  const[grade,setGrade]=useState(classData?.grade||5),[className,setClassName]=useState(classData?.className||'');
+  const[subjectIds,setSubjectIds]=useState(classData?.subjectIds||defaultSubjectIds),[error,setError]=useState('');
+  const toggle=id=>setSubjectIds(prev=>prev.includes(id)?prev.filter(v=>v!==id):[...prev,id]);
+  return <Modal title={classData?'学級設定':'学級を追加'} onClose={onClose}>
+    <div className="fields"><Field label="年度"><input value={schoolYear} readOnly/></Field><Field label="学年"><select value={grade} disabled={!!classData} onChange={e=>setGrade(Number(e.target.value))}>{[1,2,3,4,5,6].map(g=><option key={g} value={g}>{g}年</option>)}</select></Field><Field label="組"><input value={className} onChange={e=>setClassName(e.target.value)} maxLength={30}/></Field></div>
+    <h3>担当教科</h3><div className="check-options">{subjects.map(s=><label key={s.id}><input type="checkbox" checked={subjectIds.includes(s.id)} onChange={()=>toggle(s.id)}/><span style={{borderLeft:`4px solid ${s.color}`,paddingLeft:4}}>{s.name}</span></label>)}</div>
+    <button className="action" onClick={()=>setSubjectIds(subjects.map(s=>s.id))}>全教科を選択</button> <button className="action" onClick={()=>setSubjectIds([])}>選択を解除</button>
+    {error&&<p className="error-text" role="alert">{error}</p>}
+    <div className="modal-actions"><button className="action" onClick={onClose}>閉じる</button><button className="action" onClick={()=>{try{if(!className.trim()||!subjectIds.length)throw new Error('組と担当教科を指定してください');onSave({id:classData?.id||uid(),schoolYear,grade,className:className.trim(),subjectIds})}catch(e){setError(e.message)}}}>保存</button></div>
+  </Modal>;
+}
+function TeacherTimetable({state,weekStart,onEdit}){
+  const days=WEEKDAYS.map((_,i)=>toKey(addDays(parseKey(weekStart),i))),lessons=assignedLessons(state).filter(s=>s.status!=='cancelled');
+  const conflicts=days.reduce((n,d)=>n+PERIODS.filter(p=>lessons.filter(s=>s.date===d&&s.period===p).length>1).length,0);
+  return <section className="page-view teacher-view"><div className="page-toolbar"><h2>担当時間割</h2><span>{state.meta.schoolYear}年度</span>{conflicts>0&&<span className="error-text" role="status">授業の重複 {conflicts}コマ</span>}</div>
+    <div className="teacher-grid"><div/>{days.map((d,i)=><div key={d} style={{fontSize:12,fontWeight:700,textAlign:'center'}}>{WEEKDAYS[i]}<br/>{fmtMD(parseKey(d))}</div>)}
+      {PERIODS.map(p=><React.Fragment key={p}><div style={{textAlign:'center',fontSize:13,fontWeight:700}}>{p}</div>{days.map(date=>{
+        const slots=lessons.filter(s=>s.date===date&&s.period===p);
+        return <div key={date} className={`teacher-cell ${slots.length>1?'conflict':''}`} data-date={date} data-period={p}>{slots.length>1&&<div className="error-text" style={{margin:0}}>重複 {slots.length}件</div>}{slots.map(s=><button key={s.lessonId} title={`${s.classLabel} ${s.unit}`} onClick={()=>onEdit(s)}><strong>{s.classLabel}</strong><span>{state.subjects.find(v=>v.id===s.subjectId)?.name||s.subjectId}</span></button>)}</div>;
+      })}</React.Fragment>)}
+    </div>
+  </section>;
+}
+function PreparationView({state,weekStart,classId,onCheck,onReschedule}){
+  const[scope,setScope]=useState(state.meta.role==='specialist'?'all':'current');
+  const classIds=scope==='all'?state.classes.filter(c=>c.schoolYear===state.meta.schoolYear).map(c=>c.id):[classId];
+  const rows=preparationList(state,weekStart,classIds),end=toKey(addDays(parseKey(weekStart),4));
+  const cancelled=assignedLessons(state).filter(s=>classIds.includes(s.classId)&&s.date>=weekStart&&s.date<=end&&s.status==='cancelled');
+  return <section className="page-view"><div className="page-toolbar"><h2>今週の準備</h2><Field label="表示する学級"><select value={scope} onChange={e=>setScope(e.target.value)}><option value="current">選択学級</option><option value="all">全担当学級</option></select></Field><span className="muted">{weekStart}〜{end}</span></div>
+    {!rows.length&&<p className="muted">持ち物の登録がありません。</p>}
+    {rows.map(r=><label className="prep-row" key={r.key}><input type="checkbox" checked={!!state.preparations[weekStart]?.[r.key]} onChange={e=>onCheck(r.key,e.target.checked)} aria-label={`${r.item} の準備完了`}/><div><strong style={{textDecoration:state.preparations[weekStart]?.[r.key]?'line-through':'none'}}>{r.item}</strong><div className="muted">{r.uses.map(s=>`${fmtMD(parseKey(s.date))} ${s.period}限 ${s.classLabel}`).join(' / ')}</div></div></label>)}
+    <div className="page-toolbar" style={{marginTop:24}}><h2>中止・振替</h2><span className="muted">未振替 {cancelled.filter(s=>!s.rescheduledTo).length}コマ</span></div>
+    {!cancelled.length&&<p className="muted">この週の中止授業はありません。</p>}
+    {cancelled.map(s=><div className="prep-row" key={s.lessonId}><div style={{flex:1}}><strong>{s.classLabel} {fmtMD(parseKey(s.date))} {s.period}限 {state.subjects.find(v=>v.id===s.subjectId)?.name||s.subjectId}</strong><div>{s.unit}</div><div className="muted">{s.cancelReason||'理由未記入'}</div></div>{s.rescheduledTo?<span className="muted">振替: {s.rescheduledTo.date} {s.rescheduledTo.period}限</span>:<button className="action" onClick={()=>onReschedule({classId:s.classId,date:s.date,period:s.period,lessonId:s.lessonId})}>振替候補</button>}</div>)}
+  </section>;
+}
+function RescheduleModal({state,origin,onSave,onClose}){
+  const c=state.classes.find(c=>c.id===origin.classId),source=getLesson(state.classPlans,origin);
+  const first=[toKey(addDays(parseKey(today()),1)),toKey(addDays(parseKey(origin.date),1)),`${c.schoolYear}-04-01`].sort().at(-1);
+  const[startDate,setStartDate]=useState(first),[endDate,setEndDate]=useState([toKey(addDays(parseKey(first),13)),`${c.schoolYear+1}-03-31`].sort()[0]);
+  const[selected,setSelected]=useState(null),[error,setError]=useState('');
+  const candidates=rescheduleCandidates(state,origin,startDate,endDate);
+  return <Modal title="振替候補" onClose={onClose}>
+    <p style={{fontSize:13}}>{classLabel(c)} {origin.date} {origin.period}限 / {source?.unit||state.subjects.find(s=>s.id===source?.subjectId)?.name}</p>
+    <div className="fields"><Field label="候補開始日"><input type="date" min={first} value={startDate} onChange={e=>{setStartDate(e.target.value);setSelected(null)}}/></Field><Field label="候補終了日"><input type="date" value={endDate} onChange={e=>{setEndDate(e.target.value);setSelected(null)}}/></Field></div>
+    <p className="muted" style={{marginBottom:12}}>翌日以降・年度内・最大28日。未入力コマの候補です。学校の時間割と校時を確認してください。</p>
+    {!candidates.length&&<p className="error-text">条件に合う候補がありません。期間・行事・担当授業を確認してください。</p>}
+    <div className="candidate-list" style={{maxHeight:270,overflowY:'auto'}}>{candidates.map(r=><button key={`${r.date}-${r.period}`} aria-pressed={selected?.date===r.date&&selected?.period===r.period} onClick={()=>setSelected(r)}>{r.date}（{WEEKDAYS[parseKey(r.date).getDay()-1]}）{r.period}限</button>)}</div>
+    {error&&<p className="error-text" role="alert">{error}</p>}
+    <div className="modal-actions"><button className="action" onClick={onClose}>閉じる</button><button className="action" disabled={!selected} onClick={()=>{try{onSave(selected)}catch(e){setError(e.message)}}}>このコマに振り替える</button></div>
+  </Modal>;
+}
+function ReportModal({state,classId,onClose}){
+  const year=state.meta.schoolYear;
+  const[scope,setScope]=useState('current'),[startDate,setStartDate]=useState(`${year}-04-01`),[endDate,setEndDate]=useState(`${year+1}-03-31`),[asOf,setAsOf]=useState(today()),[error,setError]=useState('');
+  const classIds=scope==='all'?state.classes.filter(c=>c.schoolYear===year).map(c=>c.id):[classId];
+  let rows=[];try{rows=hourReportRows(state,{classIds,startDate,endDate,asOf})}catch{}
+  return <Modal title="時数報告CSV" onClose={onClose}>
+    <div className="fields"><Field label="報告する学級"><select value={scope} onChange={e=>setScope(e.target.value)}><option value="current">選択学級</option><option value="all">全担当学級</option></select></Field><Field label="月を指定"><input type="month" min={`${year}-04`} max={`${year+1}-03`} onChange={e=>{if(!e.target.value)return;const [y,m]=e.target.value.split('-').map(Number);setStartDate(`${y}-${pad(m)}-01`);setEndDate(toKey(new Date(y,m,0)))}}/></Field><Field label="集計開始日"><input type="date" value={startDate} onChange={e=>setStartDate(e.target.value)}/></Field><Field label="集計終了日"><input type="date" value={endDate} onChange={e=>setEndDate(e.target.value)}/></Field><Field label="実施基準日"><input type="date" max={today()} value={asOf} onChange={e=>setAsOf(e.target.value)}/></Field></div>
+    <div className="table-scroll"><table className="data-table"><thead><tr><th>学級</th><th>教科</th><th>期間実施</th><th>年度実施 / 標準</th></tr></thead><tbody>{rows.map((r,i)=><tr key={i}><td>{r[2]}年{r[3]}組</td><td>{r[4]}</td><td>{r[10]}</td><td>{r[12]} / {r[8]||'—'}</td></tr>)}</tbody></table></div>
+    {error&&<p className="error-text" role="alert">{error}</p>}
+    <div className="modal-actions"><button className="action" onClick={onClose}>閉じる</button><button className="action" onClick={()=>{try{const report=hourReportRows(state,{classIds,startDate,endDate,asOf});if(!report.length)throw new Error('対象の学級・教科がありません');downloadText(`teaching-hours-${year}-${startDate}-${endDate}.csv`,encodeCSV(report),'text/csv;charset=utf-8');setError('')}catch(e){setError(e.message)}}}>CSVを書き出す</button></div>
+  </Modal>;
+}
+
 /* メインアプリ: 保存境界以外は React state を正とする。 */
 function App(){
   const[loaded]=useState(loadPlan);
-  const[meta,setMeta]=useState(loaded.plan.meta);
+  const[profile,setProfile]=useState(loaded.plan.meta);
+  const[classes,setClasses]=useState(loaded.plan.classes);
+  const[classPlans,setClassPlans]=useState(loaded.plan.classPlans);
+  const[activeClassId,setActiveClassId]=useState(loaded.plan.activeClassId);
+  const[preparations,setPreparations]=useState(loaded.plan.preparations);
+  const selectedClass=classes.find(c=>c.id===activeClassId&&c.schoolYear===profile.schoolYear)||classes.find(c=>c.schoolYear===profile.schoolYear)||null;
+  const classId=selectedClass?.id||'';
+  const meta={...profile,grade:selectedClass?.grade||5,className:selectedClass?.className||''};
   const[subjects,setSubjects]=useState(loaded.plan.subjects);
   const[events,setEvents]=useState(loaded.plan.events);
-  const[weeks,setWeeks]=useState(loaded.plan.weeks);
+  const weeks=classPlans[classId]?.weeks||{};
+  const setWeeks=updater=>setClassPlans(prev=>({...prev,[classId]:{weeks:updater(prev[classId]?.weeks||{})}}));
+  const subjectIds=profile.role==='specialist'?selectedClass?.subjectIds||[]:null;
+  const visibleSubjects=subjects.filter(s=>!subjectIds||subjectIds.includes(s.id));
   const[tasks,setTasks]=useState(()=>loadTasks(loaded.plan));
   const[curriculum,setCurriculum]=useState(loaded.plan.curriculum);
   const[storageError,setStorageError]=useState(loaded.error);
@@ -711,15 +996,18 @@ function App(){
   const[view,setView]=useState('week');
   const[eventDate,setEventDate]=useState(null);
   const[resource,setResource]=useState(null);
-  const[notice,setNotice]=useState(loaded.migrated?'旧形式のデータを移行しました。v1の保存原本は保持しています。':'');
+  const[notice,setNotice]=useState(loaded.migrated?'旧形式のデータを学級別に移行しました。v1/v2の保存原本は保持しています。':'');
   const[weekStart,setWeekStart]=useState(()=>toKey(getMonday(parseKey(inSchoolYear(today(),meta.schoolYear)?today():`${meta.schoolYear}-04-01`))));
   const[editCell,setEditCell]=useState(null);
   const[showExcel,setShowExcel]=useState(false);
   const[showSettings,setShowSettings]=useState(false);
   const[taskInput,setTaskInput]=useState('');
   const[dragSubject,setDragSubject]=useState(null);
+  const[classEditor,setClassEditor]=useState(null);
+  const[rescheduleOrigin,setRescheduleOrigin]=useState(null);
+  const[showReport,setShowReport]=useState(false);
 
-  const state=useMemo(()=>({version:2,meta,subjects,events,weeks,tasks:saveTasks(tasks),curriculum}),[meta,subjects,events,weeks,tasks,curriculum]);
+  const state=useMemo(()=>({version:3,meta:profile,activeClassId:classId||activeClassId,classes,classPlans,subjects,events,tasks:saveTasks(tasks),curriculum,preparations}),[profile,classId,activeClassId,classes,classPlans,subjects,events,tasks,curriculum,preparations]);
   const stateRef=useRef(state);stateRef.current=state;
   const blockedRef=useRef(storageBlocked);blockedRef.current=storageBlocked;
   useEffect(()=>{
@@ -736,7 +1024,14 @@ function App(){
   useEffect(()=>{
     if(!WEEKDAYS.some((_,i)=>inSchoolYear(toKey(addDays(parseKey(weekStart),i)),meta.schoolYear)))setWeekStart(toKey(getMonday(parseKey(`${meta.schoolYear}-04-01`))));
   },[meta.schoolYear]);
-  const restore=plan=>{setMeta(plan.meta);setSubjects(plan.subjects);setEvents(plan.events);setWeeks(plan.weeks);setTasks(plan.tasks);setCurriculum(plan.curriculum);setStorageBlocked(false);setStorageError('');setNotice('バックアップを復元しました')};
+  useEffect(()=>{setDragSubject(null);if(profile.role!=='specialist'&&view==='teacher')setView('week')},[profile.role]);
+  const restore=plan=>{setProfile(plan.meta);setClasses(plan.classes);setClassPlans(plan.classPlans);setActiveClassId(plan.activeClassId);setPreparations(plan.preparations);setSubjects(plan.subjects);setEvents(plan.events);setTasks(plan.tasks);setCurriculum(plan.curriculum);setStorageBlocked(false);setStorageError('');setNotice('バックアップを復元しました')};
+  const openClassEditor=c=>{setShowSettings(false);setClassEditor({data:c||null})};
+  const saveClass=c=>{
+    if(classes.some(v=>v.id!==c.id&&v.schoolYear===c.schoolYear&&v.grade===c.grade&&v.className===c.className))throw new Error('同じ学年・組は登録済みです');
+    setClasses(prev=>[...prev.filter(v=>v.id!==c.id),c]);
+    setClassPlans(prev=>({...prev,[c.id]:prev[c.id]||{weeks:{}}}));setActiveClassId(c.id);setClassEditor(null);setDragSubject(null);
+  };
 
   const weekDays=useMemo(()=>{
     const mon=parseKey(weekStart);
@@ -744,23 +1039,22 @@ function App(){
   },[weekStart]);
 
   const hourSummary=useMemo(
-    ()=>calculateHourSummary({subjects,weeks,grade:meta.grade,schoolYear:meta.schoolYear}),
-    [subjects,weeks,meta.grade,meta.schoolYear]
+    ()=>calculateHourSummary({subjects,weeks,grade:meta.grade,schoolYear:meta.schoolYear,subjectIds}),
+    [subjects,weeks,meta.grade,meta.schoolYear,subjectIds]
   );
 
   const getCell=(dayKey,period)=>weeks[weekStart]?.days?.[dayKey]?.periods?.[period]||null;
   const getGyozen=(dayKey)=>weeks[weekStart]?.days?.[dayKey]?.gyozen?.text||'';
 
   const updateCell=(dayKey,period,data)=>{
-    setWeeks(prev=>{
-      const next=JSON.parse(JSON.stringify(prev));
-      if(!next[weekStart])next[weekStart]={weekStart,grade:meta.grade,days:{}};
-      if(!next[weekStart].days[dayKey])next[weekStart].days[dayKey]={gyozen:{text:''},periods:{}};
-      next[weekStart].days[dayKey].periods[period]=data;
-      return next;
-    });
+    const ref={classId:editCell?.classId||classId,date:dayKey,period};
+    if(data&&(!Number.isFinite(data.minutes)||data.minutes<=0||data.minutes>180))throw new Error('授業分数は1〜180分で指定してください');
+    const next=replaceLesson(stateRef.current,ref,data);setClassPlans(next);
+    if(data&&data.status!=='cancelled'&&teacherConflicts(stateRef.current,dayKey,period,getLesson(stateRef.current.classPlans,ref)).length)setNotice('他の担当学級と授業が重複しています。担当時間割で確認してください');
+    return next;
   };
   const updateGyozen=(dayKey,text)=>{
+    if(!selectedClass||!inSchoolYear(dayKey,meta.schoolYear))return;
     setWeeks(prev=>{
       const next=JSON.parse(JSON.stringify(prev));
       if(!next[weekStart])next[weekStart]={weekStart,grade:meta.grade,days:{}};
@@ -771,52 +1065,38 @@ function App(){
   };
 
   const handleDrop=(dayKey,period,subjectId=dragSubject)=>{
-    if(!subjects.some(s=>s.id===subjectId))return;
+    if(!visibleSubjects.some(s=>s.id===subjectId))return;
     const existing=getCell(dayKey,period);
     if(existing?.subjectId&&existing.subjectId!==subjectId&&!confirm('このコマの教科とメモを新しい教科に置き換えますか？'))return;
     if(existing?.subjectId===subjectId){setDragSubject(null);return}
-    updateCell(dayKey,period,{subjectId,unit:'',sub:'',items:'',memo:'',status:'planned',minutes:existing?.minutes||45,curriculumUnitId:null});
+    try{updateCell(dayKey,period,{subjectId,unit:'',sub:'',items:'',memo:'',status:'planned',minutes:existing?.minutes||45,curriculumUnitId:null})}catch(e){setNotice(e.message)}
     setDragSubject(null);
   };
 
-  const moveWeek=(delta)=>setWeekStart(toKey(addDays(parseKey(weekStart),delta*7)));
+  const moveWeek=(delta)=>{
+    const next=toKey(addDays(parseKey(weekStart),delta*7));
+    if(WEEKDAYS.some((_,i)=>inSchoolYear(toKey(addDays(parseKey(next),i)),meta.schoolYear)))setWeekStart(next);
+    else setNotice('年度をまたぐ場合は設定で年度を切り替え、学級を登録してください');
+  };
 
   const copyPrevWeek=()=>{
-    const prevKey=toKey(addDays(parseKey(weekStart),-7));
-    const prev=weeks[prevKey];
-    if(!prev){alert('前の週のデータがありません');return}
     if(weeks[weekStart]&&!window.confirm('今週のデータを前週の内容で上書きします。よろしいですか？'))return;
-    setWeeks(p=>{
-      const next=JSON.parse(JSON.stringify(p));
-      const copied=JSON.parse(JSON.stringify(prev));
-      const newDays={};
-      WEEKDAYS.forEach((_,i)=>{
-        const oldDay=toKey(addDays(parseKey(prevKey),i));
-        const newDay=weekDays[i];
-        if(copied.days[oldDay])newDays[newDay]=copied.days[oldDay];
-      });
-      Object.entries(newDays).forEach(([date,day])=>PERIODS.forEach(p=>{
-        const slot=day.periods[p];if(!slot)return;
-        slot.status='planned';
-        if(!curriculum.some(c=>c.grade===prev.grade&&c.schoolYear===schoolYearOf(date)&&c.units.some(u=>u.id===slot.curriculumUnitId)))slot.curriculumUnitId=null;
-      }));
-      next[weekStart]={weekStart,grade:prev.grade,days:newDays};
-      return next;
-    });
+    try{setClassPlans(copyClassWeek(stateRef.current,classId,weekStart))}catch(e){setNotice(e.message)}
   };
 
   const addTask=()=>{
     if(!taskInput.trim())return;
-    setTasks(p=>[...p,{id:uid(),text:taskInput.trim(),date:toKey(new Date()),done:false,createdAt:Date.now()}]);
+    setTasks(p=>[...p,{id:uid(),text:taskInput.trim(),date:toKey(new Date()),done:false,createdAt:Date.now(),classId}]);
     setTaskInput('');
   };
   const toggleTask=id=>setTasks(p=>p.map(t=>t.id===id?{...t,done:!t.done}:t));
   const delTask=id=>setTasks(p=>p.filter(t=>t.id!==id));
   const todayKey=toKey(new Date());
-  const todayTasks=tasks.filter(t=>t.date===todayKey);
+  const todayTasks=tasks.filter(t=>t.date===todayKey&&(!t.classId||t.classId===classId));
 
   const handleImport=(preview,mode)=>{
-    setEvents(prev=>mergeEvents(prev,preview,mode,meta.schoolYear));
+    const scoped=preview.map(e=>e.type==='gakunen'?{...e,grade:meta.grade,id:stableId(`${e.id}|${meta.grade}`)}:e);
+    setEvents(prev=>mergeEvents(prev,scoped,mode,meta.schoolYear));
     setShowExcel(false);
   };
   const importCurriculum=plan=>{
@@ -845,32 +1125,33 @@ function App(){
             <div style={{fontSize:9,color:'#9CA3AF'}}>{meta.grade}年{meta.className}組 {meta.teacherName&&`・${meta.teacherName}`}</div>
           </div>
         </div>
-        <nav className="view-tabs" role="tablist" aria-label="画面">{[['week','週案'],['calendar','行事カレンダー'],['progress','時数・指導計画']].map(([id,label])=><button key={id} role="tab" aria-selected={view===id} onClick={()=>setView(id)}>{label}</button>)}</nav>
+        <div className="class-selector"><label htmlFor="active-class">学級</label><select id="active-class" value={classId} onChange={e=>{setActiveClassId(e.target.value);setDragSubject(null);setEditCell(null)}}>{!selectedClass&&<option value="">未登録</option>}{classes.filter(c=>c.schoolYear===meta.schoolYear).map(c=><option key={c.id} value={c.id}>{classLabel(c)}</option>)}</select><button className="action" title="学級を追加" aria-label="学級を追加" onClick={()=>openClassEditor(null)}>+</button></div>
+        <nav className="view-tabs" role="tablist" aria-label="画面">{[['week','週案'],...(profile.role==='specialist'?[['teacher','担当時間割']]:[]),['preparation','準備・振替'],['calendar','行事カレンダー'],['progress','時数・指導計画']].map(([id,label])=><button key={id} role="tab" aria-selected={view===id} onClick={()=>setView(id)}>{label}</button>)}</nav>
         <div className="week-controls" style={{display:'flex',alignItems:'center',gap:6}}>
-          {view==='week'&&<><button title="前の週" aria-label="前の週" onClick={()=>moveWeek(-1)} style={{padding:'6px 10px',borderRadius:9,background:'#F3F4F6',color:'#6B7280',fontSize:13,fontWeight:'800'}}>◀</button>
+          {['week','teacher','preparation'].includes(view)&&<><button title="前の週" aria-label="前の週" onClick={()=>moveWeek(-1)} style={{padding:'6px 10px',borderRadius:9,background:'#F3F4F6',color:'#6B7280',fontSize:13,fontWeight:'800'}}>◀</button>
           <div style={{textAlign:'center',minWidth:120}}>
             <div style={{fontSize:13,fontWeight:'900',color:'#374151'}}>{monthLabel}</div>
             <div style={{fontSize:10,color:'#9CA3AF'}}>{fmtMD(mon)}週</div>
           </div>
           <button title="次の週" aria-label="次の週" onClick={()=>moveWeek(1)} style={{padding:'6px 10px',borderRadius:9,background:'#F3F4F6',color:'#6B7280',fontSize:13,fontWeight:'800'}}>▶</button>
-          <button onClick={copyPrevWeek} style={{padding:'6px 12px',borderRadius:9,background:'#EFF6FF',color:'#2563EB',fontSize:12,fontWeight:'800',marginLeft:4}}>前週コピー</button>
-          <button onClick={()=>window.print()} style={{padding:'6px 12px',borderRadius:9,background:'#ECFDF5',color:'#059669',fontSize:12,fontWeight:'800'}}>🖨 印刷</button></>}
+          {view==='week'&&<><button onClick={copyPrevWeek} style={{padding:'6px 12px',borderRadius:9,background:'#EFF6FF',color:'#2563EB',fontSize:12,fontWeight:'800',marginLeft:4}}>前週コピー</button>
+          <button onClick={()=>window.print()} style={{padding:'6px 12px',borderRadius:9,background:'#ECFDF5',color:'#059669',fontSize:12,fontWeight:'800'}}>🖨 印刷</button></>}</>}
           <button title="設定・バックアップ" aria-label="設定・バックアップ" onClick={()=>setShowSettings(true)} style={{padding:'6px 10px',borderRadius:9,background:'#F3F4F6',color:'#6B7280',fontSize:13,fontWeight:'800'}}>⚙</button>
         </div>
       </div>
       {storageError&&<div className="notice error no-print" role="alert">{storageError} {storageBlocked&&'自動保存を停止しています。'} <button className="action" onClick={exportSavedOriginal}>保存原本の書き出し</button> <button className="action" onClick={()=>setShowSettings(true)}>バックアップ・復元</button></div>}
       {notice&&<div className="notice no-print" role="status">{notice} <button title="通知を閉じる" aria-label="通知を閉じる" onClick={()=>setNotice('')} style={{background:'none'}}>×</button></div>}
-      {view==='week'&&weekGrade!==meta.grade&&<div className="notice no-print">表示中の週案は{weekGrade}年の記録です。時数集計は設定で選択した{meta.grade}年を対象にしています。</div>}
+      {profile.role==='specialist'&&listLessons(weeks,meta.grade,meta.schoolYear).some(s=>!subjectIds.includes(s.subjectId))&&<div className="notice no-print">担当外の教科の記録は保持しています。専科の時数・準備・担当時間割には含めません。</div>}
 
       <div className="app-body" style={{flex:1,display:'flex',overflow:'hidden',minHeight:0}}>
 
-        {view==='week'?<>
+        {!selectedClass?<section className="page-view"><h2>{meta.schoolYear}年度の学級は未登録です</h2><button className="action" onClick={()=>openClassEditor(null)} style={{marginTop:16}}>学級を登録</button></section>:view==='week'?<>
 
         <div className="no-print sidebar" style={{width:180,flexShrink:0,background:'white',borderRight:'1px solid #E5E7EB',display:'flex',flexDirection:'column',overflow:'hidden'}}>
           <div style={{padding:'10px 10px 6px',flexShrink:0}}>
             <div style={{fontSize:10,fontWeight:'800',color:'#6B7280',marginBottom:6}}>教科</div>
             <div style={{display:'flex',flexWrap:'wrap',gap:4}}>
-              {subjects.map(s=>(
+              {visibleSubjects.map(s=>(
                 <button key={s.id} className="subj-chip" draggable aria-pressed={dragSubject===s.id}
                   onClick={()=>setDragSubject(dragSubject===s.id?null:s.id)}
                   onDragStart={e=>{setDragSubject(s.id);e.dataTransfer.setData('application/x-weekly-subject',s.id);e.dataTransfer.effectAllowed='copy'}}
@@ -933,7 +1214,7 @@ function App(){
             <div style={{background:'#FEF3C7',display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,fontWeight:'800',color:'#92400E'}}>行事</div>
             {weekDays.map(dk=>(
               <div key={dk} role="button" tabIndex={0} aria-label={`${dk} の行事を編集`} onClick={()=>setEventDate(dk)} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();setEventDate(dk)}}} style={{background:'#FFFBEB',borderRadius:4,padding:'2px 4px',overflow:'hidden',display:'flex',flexDirection:'column',justifyContent:'center',gap:1,cursor:'pointer'}}>
-                {(events[dk]||[]).map((ev,i)=>(
+                {(events[dk]||[]).filter(ev=>ev.grade==null||ev.grade===meta.grade).map((ev,i)=>(
                   <div key={i} title={ev.title} style={{fontSize:10,fontWeight:'700',color:'#854D0E',lineHeight:1.2,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{ev.title}</div>
                 ))}
               </div>
@@ -941,7 +1222,7 @@ function App(){
 
             <div style={{background:'#E0E7FF',display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,fontWeight:'800',color:'#3730A3'}}>業前</div>
             {weekDays.map(dk=>(
-              <input key={dk} value={getGyozen(dk)} onChange={e=>updateGyozen(dk,e.target.value)}
+              <input key={dk} disabled={!inSchoolYear(dk,meta.schoolYear)} value={getGyozen(dk)} onChange={e=>updateGyozen(dk,e.target.value)}
                 aria-label={`${dk} の業前`} placeholder="—" style={{background:'#EEF2FF',borderRadius:4,border:'none',padding:'2px 4px',fontSize:10,color:'#4338CA',fontWeight:'700',outline:'none',textAlign:'center'}}/>
             ))}
 
@@ -952,19 +1233,19 @@ function App(){
                   const cell=getCell(dk,period);
                   const subj=cell?subjects.find(s=>s.id===cell.subjectId):null;
                   return(
-                    <div key={dk} role="button" tabIndex={0} aria-label={`${dk} ${period}限 ${subj?.name||'空きコマ'}`}
+                    <div key={dk} role="button" tabIndex={inSchoolYear(dk,meta.schoolYear)?0:-1} aria-disabled={!inSchoolYear(dk,meta.schoolYear)} aria-label={`${dk} ${period}限 ${subj?.name||'空きコマ'}`}
                       className="cell-drop"
                       onDragOver={e=>{e.preventDefault();e.currentTarget.classList.add('drag-over')}}
                       onDragLeave={e=>e.currentTarget.classList.remove('drag-over')}
                       onDrop={e=>{e.preventDefault();e.currentTarget.classList.remove('drag-over');handleDrop(dk,period,e.dataTransfer.getData('application/x-weekly-subject')||dragSubject)}}
-                      onClick={()=>dragSubject?handleDrop(dk,period):setEditCell({dayKey:dk,period,dayIdx,data:cell})}
-                      onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();dragSubject?handleDrop(dk,period):setEditCell({dayKey:dk,period,dayIdx,data:cell})}}}
+                      onClick={()=>{if(inSchoolYear(dk,meta.schoolYear)){dragSubject?handleDrop(dk,period):setEditCell({classId,dayKey:dk,period,dayIdx,data:cell})}}}
+                      onKeyDown={e=>{if((e.key==='Enter'||e.key===' ')&&inSchoolYear(dk,meta.schoolYear)){e.preventDefault();dragSubject?handleDrop(dk,period):setEditCell({classId,dayKey:dk,period,dayIdx,data:cell})}}}
                       style={{
                         background:subj?`${subj.color}22`:'#FAFBFC',
                         borderRadius:5,padding:'3px 5px',cursor:'pointer',overflow:'hidden',
                         border:subj?`1px solid ${subj.color}`:'1px solid #DCE1E8',
                         display:'flex',flexDirection:'column',justifyContent:'center',
-                        position:'relative',
+                        position:'relative',opacity:inSchoolYear(dk,meta.schoolYear)?1:0.4,
                       }}>
                       {cell?.subjectId?(
                         <>
@@ -985,17 +1266,21 @@ function App(){
             ))}
           </div>
         </div>
-        </>:view==='calendar'?<CalendarView key={meta.schoolYear} meta={meta} events={events} onImport={()=>setShowExcel('events')} onEdit={setEventDate}/>:<ProgressView key={`${meta.schoolYear}-${meta.grade}`} meta={meta} subjects={subjects} weeks={weeks} curriculum={curriculum} onImport={()=>setShowExcel('curriculum')} onResource={(planId,unitId)=>setResource({planId,unitId})}/>}
+        </>:view==='teacher'?<TeacherTimetable state={state} weekStart={weekStart} onEdit={s=>{setActiveClassId(s.classId);setView('week');setEditCell({classId:s.classId,dayKey:s.date,period:s.period,dayIdx:parseKey(s.date).getDay()-1,data:getLesson(classPlans,s)})}}/>:view==='preparation'?<PreparationView key={classId} state={state} weekStart={weekStart} classId={classId} onCheck={(key,done)=>setPreparations(prev=>({...prev,[weekStart]:{...prev[weekStart],[key]:done}}))} onReschedule={setRescheduleOrigin}/>:view==='calendar'?<CalendarView key={meta.schoolYear} meta={meta} events={events} onImport={()=>setShowExcel('events')} onEdit={setEventDate}/>:<ProgressView key={`${classId}-${profile.role}-${visibleSubjects.map(s=>s.id).join(',')}`} meta={meta} subjects={visibleSubjects} subjectIds={subjectIds} weeks={weeks} curriculum={curriculum} onImport={()=>setShowExcel('curriculum')} onReport={()=>setShowReport(true)} onResource={(planId,unitId)=>setResource({planId,unitId})}/>}
       </div>
 
       {editCell&&(
-        <CellEditor cell={editCell} subjects={subjects} grade={weekGrade} curriculum={curriculum} schoolYear={schoolYearOf(editCell.dayKey)}
+        <CellEditor cell={editCell} subjects={subjects.filter(s=>!subjectIds||subjectIds.includes(s.id)||s.id===editCell.data?.subjectId)} grade={weekGrade} curriculum={curriculum} schoolYear={schoolYearOf(editCell.dayKey)}
           onSave={(data)=>{updateCell(editCell.dayKey,editCell.period,data);setEditCell(null)}}
           onDelete={()=>{updateCell(editCell.dayKey,editCell.period,null);setEditCell(null)}}
+          onReschedule={data=>{const ref={classId:editCell.classId,date:editCell.dayKey,period:editCell.period};const next=updateCell(ref.date,ref.period,data);setRescheduleOrigin({...ref,lessonId:getLesson(next,ref).lessonId});setEditCell(null)}}
           onClose={()=>setEditCell(null)}/>
       )}
       {showExcel&&<ExcelImportModal kind={showExcel} meta={meta} subjects={subjects} onClose={()=>setShowExcel(false)} onImport={showExcel==='curriculum'?importCurriculum:handleImport}/>}
-      {showSettings&&<SettingsModal meta={meta} setMeta={setMeta} state={state} onRestore={restore} onClose={()=>setShowSettings(false)}/>}
+      {showSettings&&<SettingsModal meta={profile} setMeta={setProfile} state={state} onRestore={restore} onEditClass={openClassEditor} onAddClass={()=>openClassEditor(null)} onClose={()=>setShowSettings(false)}/>}
+      {classEditor&&<ClassEditor classData={classEditor.data} schoolYear={meta.schoolYear} subjects={subjects} defaultSubjectIds={profile.role==='specialist'?(selectedClass?.subjectIds||['ongaku']):subjects.map(s=>s.id)} onSave={saveClass} onClose={()=>setClassEditor(null)}/>}
+      {rescheduleOrigin&&<RescheduleModal state={state} origin={rescheduleOrigin} onClose={()=>setRescheduleOrigin(null)} onSave={target=>{setClassPlans(rescheduleLesson(stateRef.current,rescheduleOrigin,target));setRescheduleOrigin(null);setNotice(`${target.date} ${target.period}限に振替を登録しました。実施済みにはしていません。`)}}/>}
+      {showReport&&<ReportModal state={state} classId={classId} onClose={()=>setShowReport(false)}/>}
       {eventDate&&<EventEditor date={eventDate} events={events} onAdd={addEvent} onDelete={deleteEvent} onClose={()=>setEventDate(null)}/>}
       {resourceUnit&&<ResourceEditor unit={resourceUnit} onClose={()=>setResource(null)} onSave={resources=>setCurriculum(prev=>prev.map(c=>c.id===resource.planId?{...c,units:c.units.map(u=>u.id===resource.unitId?{...u,resources}:u)}:c))}/>}
     </div>
@@ -1005,6 +1290,7 @@ function App(){
 class AppErrorBoundary extends React.Component{
   constructor(props){super(props);this.state={error:null}}
   static getDerivedStateFromError(error){return {error}}
+  componentDidCatch(error){console.error('Weekly planner render failed:',error)}
   render(){
     if(this.state.error)return <div style={{padding:24}}><h2>アプリを表示できませんでした</h2><p style={{margin:'12px 0'}}>保存データは削除していません。原本を書き出して確認できます。</p><button className="action" onClick={exportSavedOriginal}>保存原本の書き出し</button><button className="action" onClick={()=>location.reload()}>再読み込み</button></div>;
     return this.props.children;
